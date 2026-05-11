@@ -235,11 +235,15 @@ interface config has `proxy: %{mode: :auto}` (without an explicit
 The bundled PAC evaluator handles the patterns found in typical corporate
 WPAD scripts.
 
-**Predicates:**
+**Predicate atoms:**
 - `shExpMatch(host, "<glob>")` — `*` and `?` wildcards
 - `dnsDomainIs(host, ".<suffix>")` — case-insensitive suffix match
 - `isPlainHostName(host)`
+- `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
 - `host == "<literal>"` / `host === "<literal>"`
+
+**Boolean composition:** `||`, `&&`, `!`, and parentheses. Standard
+precedence (`!` > `&&` > `||`); left-associative.
 
 **Directives:**
 - `"DIRECT"` → `:direct`
@@ -250,11 +254,19 @@ WPAD scripts.
 - Fallback lists (`"PROXY a:1; PROXY b:2; DIRECT"`) — only the first
   recognized entry is returned
 
-Anything outside this subset is treated as an unmatched predicate and falls
-through to the next rule. Malformed scripts return `:direct`.
+Anything outside this subset (unsupported atom, malformed predicate, parse
+error) evaluates to false and the rule falls through. Malformed scripts
+return `:direct`.
 
-If real-world PAC files need more (logical operators, `isInNet`,
-`myIpAddress`, credential parsing, etc.), extend `VintageNetProxy.PAC`.
+`isInNet` deliberately matches only when `host` is already an IPv4
+literal — embedding DNS resolution inside PAC evaluation would make proxy
+lookup network-dependent. Real-world WPADs typically gate the IP arm with
+`isPlainHostName(host) || isInNet(host, ...)`, which works correctly under
+this rule.
+
+If real-world PAC files need more (DNS-resolving `isInNet`, `myIpAddress`,
+`weekdayRange`, credential parsing, etc.), extend
+`VintageNetProxy.PAC.Predicate`.
 
 ## Why no Duktape / PACrunner
 

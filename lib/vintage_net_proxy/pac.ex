@@ -7,11 +7,13 @@ defmodule VintageNetProxy.PAC do
   `if (predicate) return "<directive>";` rules and a final default
   `return "<directive>";`.
 
-  Predicates supported:
+  Predicates are evaluated by `VintageNetProxy.PAC.Predicate` and support
+  `||`, `&&`, `!`, and parentheses over these atoms:
 
     * `shExpMatch(host, "<glob>")` — `*` and `?` wildcards
     * `dnsDomainIs(host, ".suffix")` — case-insensitive suffix match
     * `isPlainHostName(host)` — host has no dot
+    * `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
     * `host == "<literal>"` / `host === "<literal>"`
 
   Directives supported:
@@ -25,9 +27,12 @@ defmodule VintageNetProxy.PAC do
       recognized entry is returned. Per-request failover is the caller's
       responsibility.
 
-  Anything outside this subset is treated as an unmatched predicate and
-  falls through to the next rule. Malformed scripts return `:direct`.
+  Anything outside this subset (parse error, unsupported atom, malformed
+  predicate) evaluates to false and the rule falls through. Malformed
+  scripts return `:direct`.
   """
+
+  alias VintageNetProxy.PAC.Predicate
 
   @type proxy_descriptor :: %{
           required(:scheme) => :http | :https | :socks4 | :socks5,
@@ -47,7 +52,7 @@ defmodule VintageNetProxy.PAC do
 
     matched =
       Enum.find_value(rules, fn {expr, directive} ->
-        if eval(expr, host), do: directive
+        if Predicate.eval(expr, host), do: directive
       end)
 
     (matched || extract_default(script) || "DIRECT")
@@ -72,56 +77,6 @@ defmodule VintageNetProxy.PAC do
       %URI{host: h} when is_binary(h) -> h
       _ -> ""
     end
-  end
-
-  defp eval(expr, host) do
-    expr = String.trim(expr)
-
-    match_shexp(expr, host) ||
-      match_dns_domain(expr, host) ||
-      match_plain_host(expr, host) ||
-      match_equality(expr, host)
-  end
-
-  defp match_shexp(expr, host) do
-    case Regex.run(~r/^shExpMatch\s*\(\s*host\s*,\s*["']([^"']+)["']\s*\)$/u, expr,
-           capture: :all_but_first
-         ) do
-      [pattern] -> glob_match?(host, pattern)
-      _ -> nil
-    end
-  end
-
-  defp match_dns_domain(expr, host) do
-    case Regex.run(~r/^dnsDomainIs\s*\(\s*host\s*,\s*["']([^"']+)["']\s*\)$/u, expr,
-           capture: :all_but_first
-         ) do
-      [suffix] -> String.ends_with?(String.downcase(host), String.downcase(suffix))
-      _ -> nil
-    end
-  end
-
-  defp match_plain_host(expr, host) do
-    if Regex.match?(~r/^isPlainHostName\s*\(\s*host\s*\)$/u, expr) do
-      not String.contains?(host, ".")
-    end
-  end
-
-  defp match_equality(expr, host) do
-    case Regex.run(~r/^host\s*={2,3}\s*["']([^"']+)["']$/u, expr, capture: :all_but_first) do
-      [literal] -> String.downcase(host) == String.downcase(literal)
-      _ -> nil
-    end
-  end
-
-  defp glob_match?(host, pattern) do
-    regex =
-      pattern
-      |> Regex.escape()
-      |> String.replace("\\*", ".*")
-      |> String.replace("\\?", ".")
-
-    Regex.match?(~r/^#{regex}$/i, host)
   end
 
   defp parse_directive(s) do

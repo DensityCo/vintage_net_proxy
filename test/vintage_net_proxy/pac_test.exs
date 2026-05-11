@@ -210,6 +210,46 @@ defmodule VintageNetProxy.PACTest do
     end
   end
 
+  describe "find_proxy/2 — boolean composition in predicates" do
+    test "Mozilla-style compound bypass with || and isInNet" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (isPlainHostName(host) ||
+            dnsDomainIs(host, ".mozilla.org") ||
+            isInNet(host, "10.0.0.0", "255.0.0.0"))
+          return "DIRECT";
+        return "PROXY proxy.mozilla.org:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://intranet/") == :direct
+      assert PAC.find_proxy(script, "https://wiki.mozilla.org/") == :direct
+      assert PAC.find_proxy(script, "http://10.1.2.3/") == :direct
+
+      assert PAC.find_proxy(script, "https://github.com/") ==
+               %{scheme: :http, host: "proxy.mozilla.org", port: 8080}
+    end
+
+    test "&& with negation" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (dnsDomainIs(host, ".corp") && !shExpMatch(host, "internal.*"))
+          return "PROXY corp-proxy:8080";
+        return "DIRECT";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://api.corp/") ==
+               %{scheme: :http, host: "corp-proxy", port: 8080}
+
+      # internal.* hosts negate the corp rule, fall through to default
+      assert PAC.find_proxy(script, "http://internal.corp/") == :direct
+
+      # non-corp host doesn't even reach the rule
+      assert PAC.find_proxy(script, "http://github.com/") == :direct
+    end
+  end
+
   describe "find_proxy/2 — robustness" do
     test "empty script → direct" do
       assert PAC.find_proxy("", "http://x/") == :direct
