@@ -27,11 +27,13 @@ jobs:
             otp: "27"
           - elixir: "1.18"
             otp: "27"
-          # Newer-OTP coverage: forward-compat smoke.
+          # Newer-OTP coverage: forward-compat smoke. OTP 29 isn't in
+          # setup-beam's prebuilt list yet (last checked 2026-05-11); add a
+          # 1.19 / 29 cell here when it becomes available.
           - elixir: "1.18"
             otp: "28"
           - elixir: "1.19"
-            otp: "29"
+            otp: "28"
 
     steps:
       - uses: actions/checkout@v4
