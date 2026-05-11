@@ -2,10 +2,9 @@ defmodule VintageNetProxy.Selector do
   @moduledoc false
   use GenServer
 
-  alias VintageNetProxy.{Config, Interface}
+  alias VintageNetProxy.Interface
 
   @property ["proxy", "config"]
-  @up_states [:internet, :lan]
 
   defstruct interfaces: []
 
@@ -43,8 +42,6 @@ defmodule VintageNetProxy.Selector do
     snapshots = fetch_snapshots(state)
     publish(snapshots, state.interfaces)
 
-    active = find_active(snapshots, state.interfaces)
-
     by_interface =
       Map.new(snapshots, fn {iface, snap} ->
         {iface,
@@ -57,22 +54,14 @@ defmodule VintageNetProxy.Selector do
          }}
       end)
 
-    active_info =
-      case active do
-        nil ->
-          %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}
+    active = find_active(snapshots, state.interfaces)
 
-        snap ->
-          Map.fetch!(by_interface, snap.iface)
-      end
-
-    reply =
-      Map.merge(active_info, %{
-        interfaces: state.interfaces,
-        active_iface: active && active.iface,
-        by_interface: by_interface,
-        current: VintageNet.get(@property, :unset)
-      })
+    reply = %{
+      interfaces: state.interfaces,
+      active_iface: active && active.iface,
+      by_interface: by_interface,
+      current: VintageNet.get(@property, :unset)
+    }
 
     {:reply, reply, state}
   end
@@ -102,16 +91,8 @@ defmodule VintageNetProxy.Selector do
   defp publish(snapshots, interfaces) do
     value =
       case find_active(snapshots, interfaces) do
-        nil ->
-          :unset
-
-        snap ->
-          case snap.intent do
-            %{mode: :direct} -> :direct
-            %{mode: :manual} = m -> Config.to_descriptor(m)
-            %{mode: :auto} -> if snap.pac_loaded?, do: :auto, else: :unset
-            _ -> :unset
-          end
+        nil -> :unset
+        snap -> snap.value
       end
 
     PropertyTable.put(VintageNet, @property, value)
@@ -120,7 +101,7 @@ defmodule VintageNetProxy.Selector do
   defp find_active(snapshots, interfaces) do
     Enum.find_value(interfaces, fn iface ->
       snap = Map.fetch!(snapshots, iface)
-      if snap.intent != nil and snap.connection in @up_states, do: snap
+      if snap.eligible?, do: snap
     end)
   end
 

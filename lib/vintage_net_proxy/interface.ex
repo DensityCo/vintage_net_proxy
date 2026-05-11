@@ -162,11 +162,23 @@ defmodule VintageNetProxy.Interface do
   defp snapshot_of(state) do
     %{
       iface: state.iface,
+      eligible?: state.intent != nil and state.connection in @up_states,
+      value: value_of(state),
+      # Introspection — surfaced via VintageNetProxy.status/0.
       intent: state.intent,
       connection: state.connection,
       pac_loaded?: not is_nil(state.pac_script),
       dhcp_wpad_url: state.dhcp_wpad_url,
       pac_url: effective_pac_url(state)
     }
+  end
+
+  defp value_of(state) do
+    case state.intent do
+      %{mode: :direct} -> :direct
+      %{mode: :manual} = m -> Config.to_descriptor(m)
+      %{mode: :auto} -> if not is_nil(state.pac_script), do: :auto, else: :unset
+      _ -> :unset
+    end
   end
 end

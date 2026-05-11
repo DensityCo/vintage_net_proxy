@@ -39,10 +39,10 @@ defmodule VintageNetProxyTest do
       status = VintageNetProxy.status()
       assert status.interfaces == [iface]
       assert status.active_iface == nil
-      assert status.intent == nil
-      assert status.dhcp_wpad_url == nil
-      assert status.pac_loaded? == false
       assert status.current == :unset
+      assert status.by_interface[iface].intent == nil
+      assert status.by_interface[iface].dhcp_wpad_url == nil
+      assert status.by_interface[iface].pac_loaded? == false
     end
   end
 
@@ -188,19 +188,20 @@ defmodule VintageNetProxyTest do
   end
 
   describe "status/0" do
-    test "reflects interface config intent", %{config_property: prop} do
+    test "reflects interface config intent", %{config_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
       _ = VintageNetProxy.status()
 
       status = VintageNetProxy.status()
-      assert status.intent == %{mode: :direct}
+      assert status.active_iface == iface
+      assert status.by_interface[iface].intent == %{mode: :direct}
       assert status.current == :direct
     end
   end
 
   describe "intent: :auto end-to-end (fetch + evaluate)" do
     test "explicit :pac_url is fetched, property goes :auto, resolve returns the descriptor",
-         %{config_property: prop} do
+         %{config_property: prop, iface: iface} do
       port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
 
       PropertyTable.put(VintageNet, prop, %{
@@ -211,7 +212,7 @@ defmodule VintageNetProxyTest do
       _ = VintageNetProxy.status()
 
       assert VintageNet.get(["proxy", "config"]) == :auto
-      assert VintageNetProxy.status().pac_loaded? == true
+      assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
 
       assert VintageNetProxy.resolve("https://api.example.com/") ==
                %{scheme: :http, host: "p.corp", port: 8080}
