@@ -2,7 +2,7 @@ defmodule VintageNetProxy.Selector do
   @moduledoc false
   use GenServer
 
-  alias VintageNetProxy.{Interface, Published, Roster}
+  alias VintageNetProxy.{Interface, Publisher, Roster}
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -16,13 +16,13 @@ defmodule VintageNetProxy.Selector do
     interfaces = Keyword.get(opts, :interfaces, []) || []
     Interface.subscribe(interfaces)
     roster = Roster.load(interfaces)
-    Published.put(Roster.value(roster))
+    Publisher.put(Roster.value(roster))
     {:ok, roster}
   end
 
   @impl true
   def handle_call(:status, _from, roster),
-    do: {:reply, Roster.status(roster, Published.get()), roster}
+    do: {:reply, Roster.status(roster, Publisher.get()), roster}
 
   def handle_call({:resolve, url}, _from, roster),
     do: {:reply, Roster.resolve(roster, url), roster}
@@ -41,7 +41,7 @@ defmodule VintageNetProxy.Selector do
 
   defp update(roster, iface, fun) do
     roster = Roster.update_iface(roster, iface, fun)
-    Published.put(Roster.value(roster))
+    Publisher.put(Roster.value(roster))
     roster
   end
 end

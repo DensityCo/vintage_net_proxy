@@ -1,4 +1,4 @@
-defmodule VintageNetProxy.Published do
+defmodule VintageNetProxy.Publisher do
   @moduledoc false
 
   # The single public PropertyTable key this library writes.
