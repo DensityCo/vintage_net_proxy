@@ -85,7 +85,7 @@ defmodule VintageNetProxy do
   supplied URL.
   """
 
-  alias VintageNetProxy.{Config, Selector}
+  alias VintageNetProxy.Selector
 
   @property ["proxy", "config"]
 
@@ -125,18 +125,14 @@ defmodule VintageNetProxy do
   @doc """
   Introspection snapshot — current internal state.
 
-  The flat `:intent`, `:pac_url`, `:dhcp_wpad_url`, `:pac_loaded?` fields
-  mirror the *currently active* interface (or are `nil`/`false` when no
-  interface is active). `:by_interface` gives the same information per
-  configured interface.
+  `:active_iface` is the currently selected interface (or `nil`).
+  `:by_interface` maps each configured interface to its `:intent`,
+  `:connection`, `:dhcp_wpad_url`, `:pac_url`, `:pac_loaded?`. The
+  published proxy is `:current`.
   """
   @spec status() :: %{
           interfaces: [String.t()],
           active_iface: String.t() | nil,
-          intent: Config.t() | nil,
-          pac_url: String.t() | nil,
-          dhcp_wpad_url: String.t() | nil,
-          pac_loaded?: boolean(),
           by_interface: %{optional(String.t()) => map()},
           current: proxy()
         }

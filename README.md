@@ -164,14 +164,16 @@ VintageNetProxy.Supervisor
 ```
 
 Each `Interface` is a small GenServer that owns one interface's
-subscriptions and PAC fetch lifecycle and keeps the state private. On
-any state change it casts `{:iface_changed, iface}` to the `Selector`.
+subscriptions, PAC fetch lifecycle, and proxy-value computation
+(direct / manual descriptor / `:auto` / `:unset`). It keeps the
+state private. On any state change it calls
+`Selector.notify_changed/0`.
 
-The `Selector` reads each Interface's snapshot directly via
-`Interface.snapshot/1` whenever it needs to recompute, picks the
-active one, and publishes the global `["proxy", "config"]`. No
-PropertyTable keys for internal state — the only thing the library
-publishes is the public `["proxy", "config"]`.
+The `Selector` is a thin priority picker. It reads each Interface's
+snapshot via `Interface.snapshot/1`, walks the list to find the first
+`eligible?` one, and publishes that interface's `:value` to the global
+`["proxy", "config"]`. The Selector doesn't know about modes — that
+logic lives in Interface where the data does.
 
 `Selector.status/0` pulls fresh snapshots from every Interface,
 which also serves as a sync barrier (all queued property events on
