@@ -10,28 +10,14 @@ defmodule VintageNetProxy.Interface do
 
   defstruct iface: nil,
             intent: nil,
-            dhcp_wpad: nil,
+            dhcp_wpad_url: nil,
             pac_script: nil,
             connection: nil
-
-  def child_spec(opts) do
-    iface = Keyword.fetch!(opts, :iface)
-
-    %{
-      id: {__MODULE__, iface},
-      start: {__MODULE__, :start_link, [opts]},
-      restart: :permanent,
-      type: :worker
-    }
-  end
 
   def start_link(opts) do
     iface = Keyword.fetch!(opts, :iface)
     GenServer.start_link(__MODULE__, iface, name: via(iface))
   end
-
-  @doc "Registry tuple addressing the Interface for `iface`."
-  def via(iface), do: {:via, Registry, {VintageNetProxy.Registry, iface}}
 
   @doc "Current snapshot of this interface's resolution state. Sync."
   def snapshot(iface), do: GenServer.call(via(iface), :snapshot)
@@ -96,9 +82,11 @@ defmodule VintageNetProxy.Interface do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
+  defp via(iface), do: {:via, Registry, {VintageNetProxy.Registry, iface}}
+
   defp settle(state) do
     new_state = refresh_pac_if_needed(state)
-    GenServer.cast(VintageNetProxy.Selector, {:iface_changed, new_state.iface})
+    GenServer.cast(VintageNetProxy.Selector, :changed)
     new_state
   end
 
@@ -126,13 +114,13 @@ defmodule VintageNetProxy.Interface do
   end
 
   defp load_wpad(state) do
-    wpad =
+    url =
       case VintageNet.get(["interface", state.iface, "dhcp_options"]) do
         %{wpad: url} when is_binary(url) and url != "" -> url
         _ -> nil
       end
 
-    %{state | dhcp_wpad: wpad}
+    %{state | dhcp_wpad_url: url}
   end
 
   defp refresh_pac_if_needed(state) do
@@ -166,7 +154,7 @@ defmodule VintageNetProxy.Interface do
   defp effective_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
     do: url
 
-  defp effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad: url}) when is_binary(url),
+  defp effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
     do: url
 
   defp effective_pac_url(_), do: nil
@@ -177,7 +165,7 @@ defmodule VintageNetProxy.Interface do
       intent: state.intent,
       connection: state.connection,
       pac_loaded?: not is_nil(state.pac_script),
-      dhcp_wpad_url: state.dhcp_wpad,
+      dhcp_wpad_url: state.dhcp_wpad_url,
       pac_url: effective_pac_url(state)
     }
   end

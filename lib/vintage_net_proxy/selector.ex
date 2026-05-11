@@ -37,15 +37,10 @@ defmodule VintageNetProxy.Selector do
 
   @impl true
   def handle_call(:status, _from, state) do
-    recompute(state)
+    snapshots = fetch_snapshots(state)
+    publish(snapshots, state.interfaces)
 
-    snapshots = Map.new(state.interfaces, fn iface -> {iface, Interface.snapshot(iface)} end)
-
-    active =
-      Enum.find(state.interfaces, fn iface ->
-        snap = Map.fetch!(snapshots, iface)
-        snap.intent != nil and snap.connection in @up_states
-      end)
+    active = find_active(snapshots, state.interfaces)
 
     by_interface =
       Map.new(snapshots, fn {iface, snap} ->
@@ -64,14 +59,14 @@ defmodule VintageNetProxy.Selector do
         nil ->
           %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}
 
-        iface ->
-          Map.fetch!(by_interface, iface)
+        snap ->
+          Map.fetch!(by_interface, snap.iface)
       end
 
     reply =
       Map.merge(active_info, %{
         interfaces: state.interfaces,
-        active_iface: active,
+        active_iface: active && active.iface,
         by_interface: by_interface,
         current: VintageNet.get(@property, :unset)
       })
@@ -81,16 +76,16 @@ defmodule VintageNetProxy.Selector do
 
   def handle_call({:resolve, url}, _from, state) do
     reply =
-      case find_active(state) do
+      case find_active(fetch_snapshots(state), state.interfaces) do
         nil -> :direct
-        iface -> Interface.resolve(iface, url)
+        snap -> Interface.resolve(snap.iface, url)
       end
 
     {:reply, reply, state}
   end
 
   @impl true
-  def handle_cast({:iface_changed, _iface}, state) do
+  def handle_cast(:changed, state) do
     recompute(state)
     {:noreply, state}
   end
@@ -99,29 +94,34 @@ defmodule VintageNetProxy.Selector do
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp recompute(state),
-    do: PropertyTable.put(VintageNet, @property, compute_value(state))
+    do: publish(fetch_snapshots(state), state.interfaces)
 
-  defp compute_value(state) do
-    case find_active(state) do
-      nil ->
-        :unset
+  defp publish(snapshots, interfaces) do
+    value =
+      case find_active(snapshots, interfaces) do
+        nil ->
+          :unset
 
-      iface ->
-        snap = Interface.snapshot(iface)
+        snap ->
+          case snap.intent do
+            %{mode: :direct} -> :direct
+            %{mode: :manual} = m -> Config.to_descriptor(m)
+            %{mode: :auto} -> if snap.pac_loaded?, do: :auto, else: :unset
+            _ -> :unset
+          end
+      end
 
-        case snap.intent do
-          %{mode: :direct} -> :direct
-          %{mode: :manual} = m -> Config.to_descriptor(m)
-          %{mode: :auto} -> if snap.pac_loaded?, do: :auto, else: :unset
-          _ -> :unset
-        end
-    end
+    PropertyTable.put(VintageNet, @property, value)
   end
 
-  defp find_active(state) do
-    Enum.find(state.interfaces, fn iface ->
-      snap = Interface.snapshot(iface)
-      snap.intent != nil and snap.connection in @up_states
+  defp find_active(snapshots, interfaces) do
+    Enum.find_value(interfaces, fn iface ->
+      snap = Map.fetch!(snapshots, iface)
+      if snap.intent != nil and snap.connection in @up_states, do: snap
     end)
+  end
+
+  defp fetch_snapshots(state) do
+    Map.new(state.interfaces, fn iface -> {iface, Interface.snapshot(iface)} end)
   end
 end
