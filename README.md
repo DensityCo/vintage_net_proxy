@@ -152,48 +152,113 @@ reclaims. Each interface's PAC script is cached only while that
 interface is up — disconnecting drops the script so a reconnect
 re-fetches against the (possibly new) network.
 
-### Architecture
+## Architecture
 
 ```
-VintageNetProxy.Supervisor
-└── VintageNetProxy.Selector   (GenServer: subscribes + dispatches)
-        ├── VintageNetProxy.Roster      (pure: priority list + active picker)
-        ├── VintageNetProxy.Interface   (pure: per-iface struct + transitions)
-        └── VintageNetProxy.Publisher   (owns the published-config property)
+VintageNetProxy.Supervisor              (rest_for_one)
+├── VintageNetProxy.InterfaceRegistry   (Registry: iface name → pid)
+├── VintageNetProxy.Selector            (GenServer: snapshot aggregator)
+└── VintageNetProxy.InterfaceSupervisor (one_for_one)
+        ├── VintageNetProxy.Interface (eth0)   (GenServer: one per iface)
+        ├── VintageNetProxy.Interface (wlan0)  (GenServer: one per iface)
+        └── ...
 ```
 
-The `Selector` GenServer is a thin shim: on init it calls
-`Interface.subscribe/1` with the list of tracked interfaces
-(subscribing the GenServer to each one's `config`, `dhcp_options`, and
-`connection` keys), builds a `Roster` from their initial states via
-`Roster.load/1`, then routes each subsequent property event to the
-matching `Interface.on_config/2`, `Interface.on_dhcp_options/2`, or
-`Interface.on_connection/2`, and calls `Publisher.put/1` after each
-update.
+### Why one GenServer per interface
 
-The non-process modules:
+PAC discovery requires fetching a script over HTTP, which is blocking
+and can be slow (5-second timeout if a WPAD URL is unreachable). The
+property changes that *trigger* a fetch — `connection` flipping up, a
+new DHCP wpad, a config edit — flow in continuously, and consumers of
+`resolve/1` and `status/0` need answers in microseconds, not seconds.
 
-  * `VintageNetProxy.Interface` — per-interface struct and state
-    transitions (`on_*`, `eligible?`, `value`, `resolve`, `snapshot`).
-    Mode-to-value mapping (direct / manual descriptor / `:auto` /
-    `:unset`) lives in `Interface.value/1`, next to the state that
-    determines it.
+A single-GenServer design forces a tradeoff: either block the mailbox
+on the fetch (so `resolve/1` waits up to 5 seconds during an in-flight
+PAC load) or move the fetch to a side `Task` (which then needs URL
+tagging, stale-result rejection, and a coordination handshake to keep
+the cached script consistent).
 
-  * `VintageNetProxy.Roster` — holds the priority list of interfaces
-    plus `%{iface => Interface.t}`. Knows how to find the active
-    interface and to compute the published `value`, the `resolve`
-    result, and the `status` map. `Roster.new/2` is pure (tests build
-    rosters by hand); `Roster.load/1` is the impure counterpart that
-    reads each interface's initial state from the PropertyTable.
+Per-interface GenServers split the problem geographically:
+
+  * Each `Interface` owns one network interface end-to-end — subscribes
+    to its three PropertyTable keys (`config`, `dhcp_options`,
+    `connection`), holds the per-interface state (intent, connection,
+    DHCP wpad, cached `pac_script`), and runs `Fetcher.get/1`
+    synchronously inside its own mailbox. **The blocking is real but
+    localized**: it only stalls that interface's own event processing,
+    not the Selector or other interfaces.
+
+  * The `Selector` shrinks to a snapshot aggregator. Each Interface
+    pushes its full state to the Selector via
+    `{:interface_changed, iface, state}` after every change. The
+    Selector keeps the latest snapshot per interface in a `Roster`,
+    picks the highest-priority eligible interface, and publishes the
+    resulting proxy value. **`resolve/1` and `status/0` are served
+    from cached snapshots and never block on a fetch.**
+
+  * Stale-script handling falls out for free. Because each Interface's
+    mailbox is single-threaded, a fetch runs against whatever URL was
+    effective when the fetch started. Subsequent property changes
+    queue up and are processed *after* the fetch completes. No URL
+    tagging or "is this result still valid?" check is needed in the
+    code path.
+
+### Fast startup
+
+`Interface.init/1` reads PropertyTable values (fast) and returns
+immediately with `{:ok, state, {:continue, :startup}}`. The
+`handle_continue(:startup, ...)` callback does the blocking PAC fetch
+*after* init returns. Effects:
+
+  * `Supervisor.start_link` returns in ~5ms regardless of whether PAC
+    URLs are reachable (verified: 5057ms → 5ms with an unreachable PAC
+    URL pre-populated in the PropertyTable).
+  * Multiple interfaces fetch their PAC scripts in parallel — each
+    `handle_continue` runs in its own process.
+  * Application boot doesn't stall on the network coming up.
+
+### Supervision
+
+Top-level `:rest_for_one` ensures the Selector and the
+InterfaceSupervisor restart together when the Selector dies — fresh
+Interfaces re-push their initial snapshots to the fresh Selector and
+the system recovers. The inner `InterfaceSupervisor` is `:one_for_one`,
+so a crash in one Interface doesn't disturb its siblings: only that
+interface restarts, re-reads its state, and re-fetches its PAC.
+
+Interfaces are registered via the
+`VintageNetProxy.InterfaceRegistry` (`{:via, Registry, ...}`), so they're
+discoverable by interface name —
+`VintageNetProxy.Interface.get(iface)` returns the live state for
+debugging or external inspection.
+
+### Module map
+
+  * `VintageNetProxy.Interface` — both the per-interface struct (the
+    shape of a snapshot) and the GenServer that maintains it. Pure
+    helpers (`eligible?`, `value`, `resolve`, `effective_pac_url`,
+    `snapshot`) operate on the struct and are tested without a
+    process.
+
+  * `VintageNetProxy.Selector` — a thin GenServer (~35 lines). One
+    handle_info clause for `{:interface_changed, ...}`, two
+    handle_calls for `status` and `resolve`. It owns no fetch logic
+    and no PropertyTable subscriptions.
+
+  * `VintageNetProxy.Roster` — a pure module: priority list of
+    interfaces plus `%{iface => Interface.t}`. Knows how to find the
+    active interface and to compute the published `value`, the
+    `resolve` result, and the `status` map.
 
   * `VintageNetProxy.Publisher` — owns the single public PropertyTable
     key this library writes (`["proxy", "config"]`). Three calls:
     `put/1`, `get/0`, `property/0`. Selector is the only caller.
 
-The Selector GenServer is the only place that owns a mailbox or calls
-`VintageNet.subscribe/1`. All priority/selection logic is testable in
-isolation against `Roster` and `Interface` without spinning up the
-supervision tree.
+  * `VintageNetProxy.Fetcher` — synchronous `Fetcher.get(url)` using
+    `:httpc`. Has a 5-second timeout and a 256 KiB body cap.
+
+  * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP` — the PAC
+    script evaluator (see "PAC subset" below).
 
 ## Persistence
 
