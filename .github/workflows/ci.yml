@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install vintage_net system headers
+        # vintage_net's `if_monitor` NIF needs libmnl and libnl-genl-3 to
+        # compile against the host. These aren't installed on ubuntu-latest
+        # by default. Same packages vintage_net's own README documents.
+        run: sudo apt-get update && sudo apt-get install -y libmnl-dev libnl-genl-3-dev
+
       - name: Set up Erlang/OTP and Elixir
         uses: erlef/setup-beam@v1
         with:
@@ -58,6 +64,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install vintage_net system headers
+        # vintage_net's `if_monitor` NIF needs libmnl and libnl-genl-3 to
+        # compile against the host. These aren't installed on ubuntu-latest
+        # by default. Same packages vintage_net's own README documents.
+        run: sudo apt-get update && sudo apt-get install -y libmnl-dev libnl-genl-3-dev
 
       - name: Set up Erlang/OTP and Elixir
         uses: erlef/setup-beam@v1
