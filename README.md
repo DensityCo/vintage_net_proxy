@@ -131,9 +131,18 @@ VintageNet.configure("eth0",  %{type: VintageNetEthernet, ipv4: %{method: :dhcp}
                                 proxy: %{mode: :direct}})
 ```
 
-(Note: at present the library tracks a single interface — set via
-`server_opts: [interface: ...]`. Multi-interface routing is a future
-enhancement.)
+The server is given an ordered list of interfaces it should track:
+
+```elixir
+config :vintage_net_proxy,
+  server_opts: [interfaces: ["eth0", "wlan0"]]
+```
+
+It walks the list in order and selects the first interface whose
+`connection` is `:internet` or `:lan` *and* whose config carries a
+`:proxy` intent. If the active interface goes offline, the next eligible
+interface takes over; when it returns, it reclaims. The cached PAC for
+an interface is dropped whenever that interface disconnects.
 
 ## Persistence
 
