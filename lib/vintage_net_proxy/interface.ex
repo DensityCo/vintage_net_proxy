@@ -54,7 +54,8 @@ defmodule VintageNetProxy.Interface do
       |> load_wpad()
       |> refresh_pac_if_needed()
 
-    publish(state)
+    # No notify on init: the Selector pulls fresh state via snapshot/1
+    # after it starts each Interface as a child.
     {:ok, state}
   end
 
@@ -97,7 +98,7 @@ defmodule VintageNetProxy.Interface do
 
   defp settle(state) do
     new_state = refresh_pac_if_needed(state)
-    publish(new_state)
+    GenServer.cast(VintageNetProxy.Selector, {:iface_changed, new_state.iface})
     new_state
   end
 
@@ -170,23 +171,14 @@ defmodule VintageNetProxy.Interface do
 
   defp effective_pac_url(_), do: nil
 
-  defp publish(state) do
-    PropertyTable.put(
-      VintageNet,
-      ["proxy", "interface", state.iface, "snapshot"],
-      snapshot_of(state)
-    )
-  end
-
   defp snapshot_of(state) do
     %{
       iface: state.iface,
       intent: state.intent,
       connection: state.connection,
-      pac_script: state.pac_script,
+      pac_loaded?: not is_nil(state.pac_script),
       dhcp_wpad_url: state.dhcp_wpad,
       pac_url: effective_pac_url(state)
     }
   end
-
 end

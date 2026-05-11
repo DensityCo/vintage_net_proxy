@@ -21,8 +21,6 @@ defmodule VintageNetProxy.Selector do
     interfaces = Keyword.get(opts, :interfaces, []) || []
 
     Enum.each(interfaces, fn iface ->
-      VintageNet.subscribe(["proxy", "interface", iface, "snapshot"])
-
       case DynamicSupervisor.start_child(
              VintageNetProxy.InterfaceSupervisor,
              {Interface, iface: iface}
@@ -39,24 +37,25 @@ defmodule VintageNetProxy.Selector do
 
   @impl true
   def handle_call(:status, _from, state) do
-    # Drain each Interface's mailbox so any pending property events
-    # produce fresh snapshots in the PropertyTable before we read them.
-    Enum.each(state.interfaces, &Interface.snapshot/1)
     recompute(state)
 
-    active = pick_active(state)
+    snapshots = Map.new(state.interfaces, fn iface -> {iface, Interface.snapshot(iface)} end)
+
+    active =
+      Enum.find(state.interfaces, fn iface ->
+        snap = Map.fetch!(snapshots, iface)
+        snap.intent != nil and snap.connection in @up_states
+      end)
 
     by_interface =
-      Map.new(state.interfaces, fn iface ->
-        snap = read_snapshot(iface)
-
+      Map.new(snapshots, fn {iface, snap} ->
         {iface,
          %{
-           intent: snap[:intent],
-           connection: snap[:connection],
-           dhcp_wpad_url: snap[:dhcp_wpad_url],
-           pac_url: snap[:pac_url],
-           pac_loaded?: not is_nil(snap[:pac_script])
+           intent: snap.intent,
+           connection: snap.connection,
+           dhcp_wpad_url: snap.dhcp_wpad_url,
+           pac_url: snap.pac_url,
+           pac_loaded?: snap.pac_loaded?
          }}
       end)
 
@@ -74,7 +73,7 @@ defmodule VintageNetProxy.Selector do
         interfaces: state.interfaces,
         active_iface: active,
         by_interface: by_interface,
-        current: compute_value(state)
+        current: VintageNet.get(@property, :unset)
       })
 
     {:reply, reply, state}
@@ -82,7 +81,7 @@ defmodule VintageNetProxy.Selector do
 
   def handle_call({:resolve, url}, _from, state) do
     reply =
-      case pick_active(state) do
+      case find_active(state) do
         nil -> :direct
         iface -> Interface.resolve(iface, url)
       end
@@ -91,40 +90,38 @@ defmodule VintageNetProxy.Selector do
   end
 
   @impl true
-  def handle_info({VintageNet, ["proxy", "interface", _, "snapshot"], _o, _n, _m}, state) do
+  def handle_cast({:iface_changed, _iface}, state) do
     recompute(state)
     {:noreply, state}
   end
 
+  @impl true
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp recompute(state),
     do: PropertyTable.put(VintageNet, @property, compute_value(state))
 
   defp compute_value(state) do
-    case pick_active(state) do
+    case find_active(state) do
       nil ->
         :unset
 
       iface ->
-        snap = read_snapshot(iface)
+        snap = Interface.snapshot(iface)
 
-        case snap[:intent] do
+        case snap.intent do
           %{mode: :direct} -> :direct
           %{mode: :manual} = m -> Config.to_descriptor(m)
-          %{mode: :auto} when is_binary(snap[:pac_script]) -> :auto
+          %{mode: :auto} -> if snap.pac_loaded?, do: :auto, else: :unset
           _ -> :unset
         end
     end
   end
 
-  defp pick_active(state) do
+  defp find_active(state) do
     Enum.find(state.interfaces, fn iface ->
-      snap = read_snapshot(iface)
-      snap[:intent] != nil and snap[:connection] in @up_states
+      snap = Interface.snapshot(iface)
+      snap.intent != nil and snap.connection in @up_states
     end)
   end
-
-  defp read_snapshot(iface),
-    do: VintageNet.get(["proxy", "interface", iface, "snapshot"]) || %{}
 end
