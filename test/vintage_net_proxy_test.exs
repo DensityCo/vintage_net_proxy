@@ -8,7 +8,6 @@ defmodule VintageNetProxyTest do
     config_property = ["interface", iface, "config"]
     dhcp_property = ["interface", iface, "dhcp_options"]
     connection_property = ["interface", iface, "connection"]
-    snapshot_property = ["proxy", "interface", iface, "snapshot"]
 
     # Seed connection before the tree starts so the Interface picks up
     # `:internet` in its init and is immediately eligible for selection.
@@ -17,7 +16,7 @@ defmodule VintageNetProxyTest do
     start_supervised!({VintageNetProxy.Supervisor, interfaces: [iface]})
 
     on_exit(fn ->
-      for prop <- [config_property, dhcp_property, connection_property, snapshot_property] do
+      for prop <- [config_property, dhcp_property, connection_property] do
         PropertyTable.delete(VintageNet, prop)
       end
 
@@ -370,10 +369,6 @@ defmodule VintageNetProxyTest do
         for iface <- [primary, secondary],
             prop <- ["config", "dhcp_options", "connection"] do
           PropertyTable.delete(VintageNet, ["interface", iface, prop])
-        end
-
-        for iface <- [primary, secondary] do
-          PropertyTable.delete(VintageNet, ["proxy", "interface", iface, "snapshot"])
         end
 
         PropertyTable.delete(VintageNet, ["proxy", "config"])
