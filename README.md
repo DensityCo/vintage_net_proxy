@@ -156,28 +156,36 @@ re-fetches against the (possibly new) network.
 
 ```
 VintageNetProxy.Supervisor
-└── VintageNetProxy.Selector  (one GenServer)
+└── VintageNetProxy.Selector  (GenServer: subscribes + dispatches + publishes)
+        ├── VintageNetProxy.Selector.State  (pure: priority + active picker)
+        └── VintageNetProxy.Interface       (pure: per-iface struct + transitions)
 ```
 
-The single `Selector` GenServer subscribes to each tracked interface's
-`config`, `dhcp_options`, and `connection` PropertyTable keys, and
-holds `%{iface => %Interface{}}` in its state. On each property event
-it routes to the matching `Interface.on_config/2`,
-`Interface.on_dhcp_options/2`, or `Interface.on_connection/2`,
-updates that interface's struct, walks the priority list to pick the
-first `eligible?` one, and publishes `Interface.value/1` to the
-global `["proxy", "config"]`.
+The `Selector` GenServer is a thin shim: on init it calls
+`Interface.subscribe/1` for each tracked interface (subscribing to
+`config`, `dhcp_options`, and `connection`), loads each interface's
+initial state via `Interface.load/1`, then routes each subsequent
+property event to the matching `Interface.on_config/2`,
+`Interface.on_dhcp_options/2`, or `Interface.on_connection/2`, and
+publishes after each update.
 
-`VintageNetProxy.Interface` is a **pure data module** — a struct plus
-state-transition functions (`on_*`, `eligible?`, `value`, `resolve`,
-`snapshot`). It has no process of its own; the Selector owns the only
-mailbox. The mode-to-value mapping (direct / manual descriptor /
-`:auto` / `:unset`) lives in `Interface.value/1`, next to the state
-that determines it.
+All non-process logic lives in two **pure modules**:
 
-`Selector.status/0` reads its own state synchronously — no fan-out
-calls, no sync barrier needed. The single mailbox imposes a total
-order on events and on publishes.
+  * `VintageNetProxy.Interface` — per-interface struct and state
+    transitions (`on_*`, `eligible?`, `value`, `resolve`, `snapshot`).
+    Mode-to-value mapping (direct / manual descriptor / `:auto` /
+    `:unset`) lives in `Interface.value/1`, next to the state that
+    determines it.
+
+  * `VintageNetProxy.Selector.State` — holds `%{iface => Interface.t}`
+    plus the priority list. Knows how to find the active interface
+    and to compute the published `value`, the `resolve` result, and
+    the `status` map. No processes, no PropertyTable.
+
+The Selector GenServer holds a `%State{}` and is the only place that
+calls `VintageNet.subscribe/1`, `PropertyTable.put/3`, or `VintageNet.get/2`.
+This makes the priority/selection logic unit-testable without spinning
+up the supervision tree.
 
 ## Persistence
 
