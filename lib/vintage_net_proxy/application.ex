@@ -5,11 +5,16 @@ defmodule VintageNetProxy.Application do
   @impl true
   def start(_type, _args) do
     children =
-      case Application.get_env(:vintage_net_proxy, :server_opts, []) do
-        false -> []
-        opts -> [{VintageNetProxy.Server, opts}]
+      if Application.get_env(:vintage_net_proxy, :start?, true) do
+        interfaces = Application.get_env(:vintage_net_proxy, :interfaces, [])
+        [{VintageNetProxy.Supervisor, interfaces: interfaces}]
+      else
+        []
       end
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: VintageNetProxy.Supervisor)
+    Supervisor.start_link(children,
+      strategy: :one_for_one,
+      name: VintageNetProxy.AppSupervisor
+    )
   end
 end

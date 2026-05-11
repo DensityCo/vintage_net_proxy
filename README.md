@@ -131,9 +131,36 @@ VintageNet.configure("eth0",  %{type: VintageNetEthernet, ipv4: %{method: :dhcp}
                                 proxy: %{mode: :direct}})
 ```
 
-(Note: at present the library tracks a single interface — set via
-`server_opts: [interface: ...]`. Multi-interface routing is a future
-enhancement.)
+Tell the library which interfaces to track, in priority order:
+
+```elixir
+config :vintage_net_proxy, interfaces: ["eth0", "wlan0"]
+```
+
+At runtime the library walks the list and picks the first interface
+that (a) is connected (`connection` is `:internet` or `:lan`) and
+(b) has a `:proxy` intent in its config. When the active interface goes
+offline, the next eligible one takes over; when it returns, it
+reclaims. Each interface's PAC script is cached only while that
+interface is up — disconnecting drops the script so a reconnect
+re-fetches against the (possibly new) network.
+
+### Architecture
+
+```
+VintageNetProxy.Supervisor
+├── VintageNetProxy.Registry            (Interface lookup by name)
+├── VintageNetProxy.InterfaceSupervisor (DynamicSupervisor)
+│   ├── VintageNetProxy.Interface ("eth0")
+│   └── VintageNetProxy.Interface ("wlan0")
+└── VintageNetProxy.Selector            (picks active + publishes globally)
+```
+
+Each `Interface` is a small GenServer that owns one interface's
+subscriptions and PAC fetch lifecycle, and publishes its current
+state to a private `["proxy", "interface", iface, "snapshot"]` key.
+The `Selector` subscribes to those snapshots, aggregates them, and
+publishes the global `["proxy", "config"]`.
 
 ## Persistence
 
@@ -172,12 +199,12 @@ property-subscription pattern instead.
 
 ## DHCP Option 252 wiring
 
-The Server subscribes to `["interface", iface, "dhcp_options"]` and
-extracts the `:wpad` field (DHCP Option 252) when present. Anything that
-writes `dhcp_options` to that property — typically VintageNet's own
-udhcpc handler — triggers a PAC fetch and re-publish, provided the
+Each `Interface` subscribes to `["interface", iface, "dhcp_options"]`
+and extracts the `:wpad` field (DHCP Option 252) when present. Anything
+that writes `dhcp_options` to that property — typically VintageNet's
+own udhcpc handler — triggers a PAC fetch and re-publish, provided the
 interface config has `proxy: %{mode: :auto}` (without an explicit
-`pac_url`).
+`pac_url`) and the interface's `connection` is `:internet` or `:lan`.
 
 ## PAC subset
 
