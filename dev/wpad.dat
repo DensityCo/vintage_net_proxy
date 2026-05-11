@@ -1,0 +1,15 @@
+function FindProxyForURL(url, host) {
+  // Bypass plain hostnames (intranet, mdns)
+  if (isPlainHostName(host)) return "DIRECT";
+  if (host == "localhost") return "DIRECT";
+
+  // Bypass internal networks
+  if (dnsDomainIs(host, ".internal")) return "DIRECT";
+  if (dnsDomainIs(host, ".local")) return "DIRECT";
+
+  // S3 buckets — direct (corporate proxy can't accelerate this)
+  if (shExpMatch(host, "*.s3.amazonaws.com")) return "DIRECT";
+
+  // Default: route through tinyproxy with DIRECT as the failover
+  return "PROXY 127.0.0.1:18888; DIRECT";
+}
