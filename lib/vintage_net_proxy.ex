@@ -9,7 +9,7 @@ defmodule VintageNetProxy do
   The current proxy is published at `["proxy", "config"]` in the `VintageNet`
   property table as one of:
 
-    * `:unset` — no proxy intent and no DHCP-discovered proxy
+    * `:unset` — no proxy intent and no PAC has resolved yet
     * `:direct` — connect directly, no proxy
     * `proxy_descriptor()` map — a proxy to use; see `t:proxy_descriptor/0`
 
@@ -117,9 +117,8 @@ defmodule VintageNetProxy do
           iface: String.t(),
           target_url: String.t() | nil,
           intent: Config.t() | nil,
-          wpad_url: String.t() | nil,
+          pac_url: String.t() | nil,
           dhcp_wpad_url: String.t() | nil,
-          legacy_override: :direct | proxy_descriptor() | nil,
           pac_loaded?: boolean(),
           current: proxy()
         }
@@ -145,70 +144,4 @@ defmodule VintageNetProxy do
   """
   @spec resolve(String.t()) :: resolved()
   def resolve(url) when is_binary(url), do: Server.resolve(url)
-
-  # ---------------------------------------------------------------------------
-  # Deprecated API
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Manually configure an HTTP proxy.
-
-  Deprecated. Drive proxy configuration through `VintageNet.configure/3`
-  by adding a `:proxy` field to the interface config:
-
-      VintageNet.configure("wlan0", %{
-        type: VintageNetWiFi,
-        ipv4: %{method: :dhcp},
-        proxy: %{mode: :manual, host: host, port: port}
-      })
-  """
-  @deprecated "Use VintageNet.configure/3 with a :proxy field. See VintageNetProxy.Config."
-  @spec set_manual(String.t(), pos_integer()) :: :ok
-  def set_manual(host, port) when is_binary(host) and is_integer(port) and port > 0 do
-    Server.set_override(%{scheme: :http, host: host, port: port})
-  end
-
-  @doc """
-  Manually configure a proxy via a full descriptor map.
-
-  Deprecated. See `set_manual/2`.
-  """
-  @deprecated "Use VintageNet.configure/3 with a :proxy field. See VintageNetProxy.Config."
-  @spec set_manual(proxy_descriptor()) :: :ok
-  def set_manual(%{scheme: scheme, host: host, port: port} = desc)
-      when scheme in [:http, :https, :socks4, :socks5] and
-             is_binary(host) and is_integer(port) and port > 0 do
-    Server.set_override(desc)
-  end
-
-  @doc "Force `:direct`. Deprecated."
-  @deprecated "Use VintageNet.configure/3 with `proxy: %{mode: :direct}`."
-  @spec set_direct() :: :ok
-  def set_direct, do: Server.set_override(:direct)
-
-  @doc "Clear any transient override. Deprecated."
-  @deprecated "Use VintageNet.configure/3 to remove the :proxy field from the interface config."
-  @spec clear() :: :ok
-  def clear, do: Server.clear_override()
-
-  @doc """
-  Set the WPAD URL programmatically.
-
-  Deprecated. Pin a PAC URL via the interface config:
-
-      VintageNet.configure("wlan0", %{
-        type: ...,
-        proxy: %{mode: :auto, pac_url: url}
-      })
-
-  Or let DHCP Option 252 supply it automatically with `%{mode: :auto}`.
-  """
-  @deprecated "Use VintageNet.configure/3 with `proxy: %{mode: :auto, pac_url: url}`."
-  @spec set_wpad_url(String.t()) :: :ok
-  def set_wpad_url(url) when is_binary(url), do: Server.set_wpad_url(url)
-
-  @doc "Clear the WPAD URL. Deprecated."
-  @deprecated "Use VintageNet.configure/3 to remove the :proxy field."
-  @spec clear_wpad_url() :: :ok
-  def clear_wpad_url, do: Server.clear_wpad_url()
 end

@@ -214,24 +214,6 @@ evaluator fits in ~150 lines of Elixir and covers the cases real
 corporate networks actually deploy. Revisit if a customer ships a PAC
 file that needs the full grammar.
 
-## Deprecated runtime API
-
-The following functions still work but log a deprecation warning. Drive
-proxy configuration through `VintageNet.configure/3` instead.
-
-| Deprecated | Replacement |
-|---|---|
-| `VintageNetProxy.set_manual(host, port)` | `proxy: %{mode: :manual, host: host, port: port}` |
-| `VintageNetProxy.set_manual(descriptor)` | `proxy: %{mode: :manual, ...}` |
-| `VintageNetProxy.set_direct/0` | `proxy: %{mode: :direct}` |
-| `VintageNetProxy.set_wpad_url(url)` | `proxy: %{mode: :auto, pac_url: url}` |
-| `VintageNetProxy.clear/0` | Remove the `:proxy` field via `VintageNet.configure/3` |
-| `VintageNetProxy.clear_wpad_url/0` | Remove the `:proxy` field via `VintageNet.configure/3` |
-
-The retained read-only API (`property/0`, `subscribe/0`, `unsubscribe/0`,
-`get/0`, `status/0`, `resolve/1`, `set_target_url/1`, `get_target_url/0`)
-is unaffected.
-
 ## Status
 
 Early. The PAC parser is deliberately small; real-world PAC files may

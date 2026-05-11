@@ -17,11 +17,7 @@ defmodule VintageNetProxy.Server do
             intent: nil,
             dhcp_wpad: nil,
             pac_script: nil,
-            target_url: nil,
-            # Transient override for the deprecated set_override/set_wpad_url APIs.
-            # New code should drive everything through `VintageNet.configure/3`.
-            legacy_override: nil,
-            legacy_pac_url: nil
+            target_url: nil
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -32,14 +28,6 @@ defmodule VintageNetProxy.Server do
 
   def set_target_url(url), do: GenServer.call(__MODULE__, {:set_target_url, url})
   def get_target_url, do: GenServer.call(__MODULE__, :get_target_url)
-
-  # Deprecated paths preserved for back-compat. These all log a warning and
-  # store a transient override that survives until the next interface config
-  # change or process restart.
-  def set_override(value), do: GenServer.call(__MODULE__, {:legacy_set_override, value})
-  def clear_override, do: GenServer.call(__MODULE__, :legacy_clear_override)
-  def set_wpad_url(url), do: GenServer.call(__MODULE__, {:legacy_set_wpad_url, url})
-  def clear_wpad_url, do: GenServer.call(__MODULE__, :legacy_clear_wpad_url)
 
   @impl true
   def init(opts) do
@@ -73,9 +61,8 @@ defmodule VintageNetProxy.Server do
       iface: state.iface,
       target_url: state.target_url,
       intent: state.intent,
-      wpad_url: effective_pac_url(state),
+      pac_url: effective_pac_url(state),
       dhcp_wpad_url: state.dhcp_wpad,
-      legacy_override: state.legacy_override,
       pac_loaded?: not is_nil(state.pac_script),
       current: value(state)
     }
@@ -95,32 +82,6 @@ defmodule VintageNetProxy.Server do
 
   def handle_call(:get_target_url, _from, state) do
     {:reply, state.target_url, state}
-  end
-
-  def handle_call({:legacy_set_override, value}, _from, state) do
-    deprecation_warning("set_override/1 (set_manual/set_direct)")
-    new_state = %{state | legacy_override: value}
-    publish(new_state)
-    {:reply, :ok, new_state}
-  end
-
-  def handle_call(:legacy_clear_override, _from, state) do
-    new_state = %{state | legacy_override: nil}
-    publish(new_state)
-    {:reply, :ok, new_state}
-  end
-
-  def handle_call({:legacy_set_wpad_url, url}, _from, state) do
-    deprecation_warning("set_wpad_url/1")
-    new_state = %{state | legacy_pac_url: url} |> refresh_pac_if_needed()
-    publish(new_state)
-    {:reply, :ok, new_state}
-  end
-
-  def handle_call(:legacy_clear_wpad_url, _from, state) do
-    new_state = %{state | legacy_pac_url: nil, pac_script: nil} |> refresh_pac_if_needed()
-    publish(new_state)
-    {:reply, :ok, new_state}
   end
 
   @impl true
@@ -203,27 +164,15 @@ defmodule VintageNetProxy.Server do
     end
   end
 
-  # Effective PAC URL = whichever PAC URL we should be evaluating right now.
-  # Priority: legacy override (set_wpad_url) > explicit pac_url in intent >
-  # DHCP-discovered WPAD URL when intent is :auto. Nil otherwise.
-  defp effective_pac_url(%{legacy_pac_url: url}) when is_binary(url), do: url
-
+  # Effective PAC URL — which URL to evaluate right now. Explicit `:pac_url`
+  # in the intent wins; otherwise fall back to the DHCP-discovered WPAD URL.
   defp effective_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url), do: url
-
   defp effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad: url}) when is_binary(url), do: url
-
   defp effective_pac_url(_), do: nil
 
   defp publish(state), do: PropertyTable.put(VintageNet, @property, value(state))
 
-  # Resolved proxy value priority:
-  #   1. Transient legacy override (set_manual/set_direct) — deprecated
-  #   2. Interface config intent (:direct | :manual | :auto + PAC result)
-  #   3. :unset (no intent and no override)
-  defp value(%{legacy_override: o}) when not is_nil(o), do: o
-
   defp value(%{intent: %{mode: :direct}}), do: :direct
-
   defp value(%{intent: %{mode: :manual} = m}), do: Config.to_descriptor(m)
 
   defp value(%{intent: %{mode: :auto}, pac_script: script, target_url: target})
@@ -233,12 +182,8 @@ defmodule VintageNetProxy.Server do
 
   defp value(_), do: :unset
 
-  # Per-URL resolution mirrors `value/1` but evaluates the PAC against the
-  # supplied URL instead of the global target.
-  defp resolve_for(%{legacy_override: o}, _url) when not is_nil(o), do: o
-
+  # Per-URL resolution evaluates PAC against the supplied URL.
   defp resolve_for(%{intent: %{mode: :direct}}, _url), do: :direct
-
   defp resolve_for(%{intent: %{mode: :manual} = m}, _url), do: Config.to_descriptor(m)
 
   defp resolve_for(%{intent: %{mode: :auto}, pac_script: script}, url) when is_binary(script) do
@@ -246,12 +191,4 @@ defmodule VintageNetProxy.Server do
   end
 
   defp resolve_for(_, _url), do: :direct
-
-  defp deprecation_warning(api) do
-    Logger.warning(
-      "VintageNetProxy.#{api} is deprecated. Drive proxy configuration through " <>
-        "VintageNet.configure/3 by adding a `:proxy` field to the interface config. " <>
-        "See VintageNetProxy.Config for the schema."
-    )
-  end
 end

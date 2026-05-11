@@ -32,7 +32,6 @@ defmodule VintageNetProxy.ServerTest do
       assert status.target_url == nil
       assert status.intent == nil
       assert status.dhcp_wpad_url == nil
-      assert status.legacy_override == nil
       assert status.pac_loaded? == false
       assert status.current == :unset
     end
@@ -186,40 +185,6 @@ defmodule VintageNetProxy.ServerTest do
 
     test ":direct when no intent and no override" do
       assert Server.resolve("https://x/") == :direct
-    end
-  end
-
-  describe "deprecated legacy API" do
-    test "set_override(:direct) still works but logs deprecation" do
-      log = capture_log(fn -> assert :ok = Server.set_override(:direct) end)
-      assert log =~ "deprecated"
-      assert VintageNet.get(["proxy", "config"]) == :direct
-    end
-
-    test "legacy override takes precedence over interface config intent",
-         %{config_property: prop} do
-      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      _ = Server.status()
-      assert VintageNet.get(["proxy", "config"]) == :direct
-
-      desc = %{scheme: :http, host: "override", port: 9999}
-      capture_log(fn -> Server.set_override(desc) end)
-      assert VintageNet.get(["proxy", "config"]) == desc
-    end
-
-    test "clear_override reverts to the interface config intent",
-         %{config_property: prop} do
-      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      _ = Server.status()
-
-      capture_log(fn ->
-        Server.set_override(%{scheme: :http, host: "x", port: 80})
-      end)
-
-      assert VintageNet.get(["proxy", "config"]) != :direct
-
-      assert :ok = Server.clear_override()
-      assert VintageNet.get(["proxy", "config"]) == :direct
     end
   end
 
