@@ -15,6 +15,49 @@ defmodule VintageNetProxy.ProxyFieldSurvivesNormalizeTest do
   """
   use ExUnit.Case, async: true
 
+  defp wifi_config(proxy) do
+    %{
+      type: VintageNetWiFi,
+      ipv4: %{method: :dhcp},
+      vintage_net_wifi: %{
+        networks: [%{key_mgmt: :wpa_psk, ssid: "testnet", psk: "12345678"}]
+      },
+      proxy: proxy
+    }
+  end
+
+  describe "VintageNetWiFi.normalize/1" do
+    test ":proxy :direct survives" do
+      {:ok, raw_config} = VintageNet.Interface.to_raw_config("wlan0", wifi_config(%{mode: :direct}))
+      assert raw_config.source_config.proxy == %{mode: :direct}
+    end
+
+    test ":proxy :manual with all fields survives" do
+      manual = %{
+        mode: :manual,
+        scheme: :http,
+        host: "proxy.corp",
+        port: 8080,
+        username: "alice",
+        password: "secret"
+      }
+
+      {:ok, raw_config} = VintageNet.Interface.to_raw_config("wlan0", wifi_config(manual))
+      assert raw_config.source_config.proxy == manual
+    end
+
+    test ":proxy :auto with pac_url survives" do
+      intent = %{mode: :auto, pac_url: "http://wpad.corp/wpad.dat"}
+      {:ok, raw_config} = VintageNet.Interface.to_raw_config("wlan0", wifi_config(intent))
+      assert raw_config.source_config.proxy == intent
+    end
+
+    test ":proxy :auto without pac_url (DHCP-discovered) survives" do
+      {:ok, raw_config} = VintageNet.Interface.to_raw_config("wlan0", wifi_config(%{mode: :auto}))
+      assert raw_config.source_config.proxy == %{mode: :auto}
+    end
+  end
+
   describe "VintageNetEthernet.normalize/1" do
     test ":proxy :direct survives" do
       config = %{
