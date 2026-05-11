@@ -1,5 +1,15 @@
 defmodule VintageNetProxy.Interface do
-  @moduledoc false
+  @moduledoc """
+  Per-interface GenServer + state struct.
+
+  One process per network interface. Subscribes to the interface's
+  three PropertyTable keys (`config`, `dhcp_options`, `connection`),
+  holds the per-interface state (intent, connection, DHCP wpad,
+  cached `pac_script`), runs `Fetcher.get/1` synchronously inside its
+  own mailbox, and pushes a snapshot to the Selector on every change.
+
+  See the Architecture section of the README for the full picture.
+  """
   use GenServer
 
   require Logger

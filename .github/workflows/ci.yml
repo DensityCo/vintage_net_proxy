@@ -7,20 +7,71 @@ on:
     branches: [main]
 
 jobs:
-  unit:
-    name: Unit tests
+  test:
+    name: Test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
     runs-on: ubuntu-latest
 
     env:
       MIX_ENV: test
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.15"
+            otp: "26"
+          - elixir: "1.16"
+            otp: "26"
+          - elixir: "1.17"
+            otp: "27"
+          - elixir: "1.18"
+            otp: "27"
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install vintage_net system headers
-        # vintage_net's `if_monitor` NIF needs libmnl and libnl-genl-3 to
-        # compile against the host. These aren't installed on ubuntu-latest
-        # by default. Same packages vintage_net's own README documents.
+        run: sudo apt-get update && sudo apt-get install -y libmnl-dev libnl-genl-3-dev
+
+      - name: Set up Erlang/OTP and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: deps-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-
+
+      - name: Cache _build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: build-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+          restore-keys: build-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-
+
+      - name: Fetch deps
+        run: mix deps.get
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+  checks:
+    # Format / unused deps / docs — only on the latest BEAM. These checks
+    # aren't version-sensitive, so we don't fan them out across the matrix.
+    name: Lint & docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install vintage_net system headers
         run: sudo apt-get update && sudo apt-get install -y libmnl-dev libnl-genl-3-dev
 
       - name: Set up Erlang/OTP and Elixir
@@ -29,31 +80,17 @@ jobs:
           otp-version: "27"
           elixir-version: "1.18"
 
-      - name: Cache deps
-        uses: actions/cache@v4
-        with:
-          path: deps
-          key: deps-${{ runner.os }}-${{ hashFiles('mix.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - name: Cache _build
-        uses: actions/cache@v4
-        with:
-          path: _build
-          key: build-${{ runner.os }}-${{ hashFiles('mix.lock') }}
-          restore-keys: build-${{ runner.os }}-
-
       - name: Fetch deps
         run: mix deps.get
 
       - name: Check formatting
         run: mix format --check-formatted
 
-      - name: Compile (warnings as errors)
-        run: mix compile --warnings-as-errors
+      - name: Check for unused deps
+        run: mix deps.unlock --check-unused
 
-      - name: Run tests
-        run: mix test
+      - name: Build docs (ensures ex_doc renders cleanly)
+        run: mix docs
 
   integration:
     name: Integration tests (dev/ stack)
@@ -66,9 +103,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install vintage_net system headers
-        # vintage_net's `if_monitor` NIF needs libmnl and libnl-genl-3 to
-        # compile against the host. These aren't installed on ubuntu-latest
-        # by default. Same packages vintage_net's own README documents.
         run: sudo apt-get update && sudo apt-get install -y libmnl-dev libnl-genl-3-dev
 
       - name: Set up Erlang/OTP and Elixir
@@ -81,15 +115,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps
-          key: deps-${{ runner.os }}-${{ hashFiles('mix.lock') }}
-          restore-keys: deps-${{ runner.os }}-
+          key: deps-${{ runner.os }}-1.18-27-${{ hashFiles('mix.lock') }}
+          restore-keys: deps-${{ runner.os }}-1.18-27-
 
       - name: Cache _build
         uses: actions/cache@v4
         with:
           path: _build
-          key: build-${{ runner.os }}-${{ hashFiles('mix.lock') }}
-          restore-keys: build-${{ runner.os }}-
+          key: build-${{ runner.os }}-1.18-27-${{ hashFiles('mix.lock') }}
+          restore-keys: build-${{ runner.os }}-1.18-27-
 
       - name: Fetch deps
         run: mix deps.get

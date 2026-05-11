@@ -1,5 +1,12 @@
 defmodule VintageNetProxy.Fetcher do
-  @moduledoc false
+  @moduledoc """
+  Synchronous HTTP GET for PAC scripts.
+
+  Wraps `:httpc` with a 5-second timeout and a 256 KiB body cap.
+  Returns `{:ok, body}` or `{:error, reason}`. Callers (`Interface`)
+  invoke this inside their own GenServer mailbox; blocking there is
+  per-interface and doesn't affect the Selector or sibling interfaces.
+  """
 
   @max_size 256 * 1024
   @timeout 5_000

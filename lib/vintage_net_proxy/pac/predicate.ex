@@ -1,19 +1,22 @@
 defmodule VintageNetProxy.PAC.Predicate do
-  @moduledoc false
-  # PAC predicate language: boolean composition (`||`, `&&`, `!`,
-  # parentheses) over the atom predicates real WPAD files use.
-  #
-  # Atoms supported:
-  #   * shExpMatch(host, "glob")
-  #   * dnsDomainIs(host, ".suffix")
-  #   * isPlainHostName(host)
-  #   * isInNet(host, "network", "mask")   — IP-literal hosts only (no DNS)
-  #   * host == "literal" / host === "literal"
-  #
-  # Parse errors and unsupported atoms evaluate to false. That matches the
-  # surrounding evaluator's "rule with unmatchable predicate falls through"
-  # semantic — callers don't need to distinguish "false" from "couldn't
-  # parse" because in both cases the next rule (or the default) wins.
+  @moduledoc """
+  PAC predicate language: boolean composition (`||`, `&&`, `!`,
+  parentheses) over the atom predicates real WPAD files use.
+
+  Atoms supported:
+
+    * `shExpMatch(host, "glob")`
+    * `dnsDomainIs(host, ".suffix")`
+    * `isPlainHostName(host)`
+    * `isInNet(host, "network", "mask")` — IP-literal hosts only (no DNS)
+    * `host == "literal"` / `host === "literal"`
+
+  Parse errors and unsupported atoms evaluate to false. That matches
+  the surrounding evaluator's "rule with unmatchable predicate falls
+  through" semantic — callers don't need to distinguish "false" from
+  "couldn't parse" because in both cases the next rule (or the
+  default) wins.
+  """
 
   alias VintageNetProxy.PAC.IP
 

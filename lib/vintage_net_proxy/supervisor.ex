@@ -8,7 +8,7 @@ defmodule VintageNetProxy.Supervisor do
        name to its `Interface` GenServer.
     2. `VintageNetProxy.Selector` — aggregates per-interface snapshots and
        publishes the chosen proxy value.
-    3. `VintageNetProxy.InterfaceSupervisor` — one `Interface` GenServer
+    3. An internal interface supervisor — one `Interface` GenServer
        per configured interface, supervised `:one_for_one` so a crash in
        one interface doesn't disturb the others.
 

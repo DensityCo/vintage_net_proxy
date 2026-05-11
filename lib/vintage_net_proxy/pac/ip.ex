@@ -1,9 +1,11 @@
 defmodule VintageNetProxy.PAC.IP do
-  @moduledoc false
-  # IPv4 helpers for the limited isInNet() subset we support: match only
-  # when the host is already an IPv4 literal. No DNS resolution — embedding
-  # blocking name resolution inside PAC evaluation would defeat the
-  # offline/synchronous guarantees the rest of the library relies on.
+  @moduledoc """
+  IPv4 helpers for the limited `isInNet()` subset this library supports:
+  match only when the host is already an IPv4 literal. No DNS
+  resolution — embedding blocking name resolution inside PAC evaluation
+  would defeat the offline/synchronous guarantees the rest of the
+  library relies on.
+  """
 
   import Bitwise
 

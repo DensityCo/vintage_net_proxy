@@ -1,5 +1,13 @@
 defmodule VintageNetProxy.Roster do
-  @moduledoc false
+  @moduledoc """
+  Pure aggregator over per-interface snapshots.
+
+  Holds the priority list of interfaces plus `%{iface => Interface.t}`.
+  Knows how to find the active interface and compute the published
+  `value/1`, the `resolve/2` result, and the `status/2` map. Used by
+  the Selector — never spawns a process or touches the PropertyTable
+  itself.
+  """
 
   alias VintageNetProxy.Interface
 

@@ -1,5 +1,9 @@
 defmodule VintageNetProxy.Publisher do
-  @moduledoc false
+  @moduledoc """
+  Owns the single public PropertyTable key this library writes,
+  `["proxy", "config"]`. Three calls: `put/1`, `get/0`, `property/0`.
+  Selector is the only writer.
+  """
 
   # The single public PropertyTable key this library writes.
   @property ["proxy", "config"]
