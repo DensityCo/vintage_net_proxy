@@ -21,10 +21,12 @@ defmodule VintageNetProxy.Interface do
           connection: atom() | nil
         }
 
-  @doc "Subscribe the calling process to the VintageNet PropertyTable keys this Interface needs."
-  def subscribe(iface) do
-    Enum.each(["config", "dhcp_options", "connection"], fn prop ->
-      VintageNet.subscribe(["interface", iface, prop])
+  @doc "Subscribe the calling process to the PropertyTable keys these interfaces emit."
+  def subscribe(ifaces) when is_list(ifaces) do
+    Enum.each(ifaces, fn iface ->
+      Enum.each(["config", "dhcp_options", "connection"], fn prop ->
+        VintageNet.subscribe(["interface", iface, prop])
+      end)
     end)
   end
 
