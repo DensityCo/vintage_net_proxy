@@ -44,26 +44,43 @@ are present only for authenticated proxies (typically set via the
 
 ## Consumer pattern
 
+For most consumers, the simplest integration is to call
+`VintageNetProxy.resolve/1` at connect time. It returns `:direct` or a
+descriptor, never `:unset` — the library collapses "no proxy intent"
+into `:direct` (treat-as-no-proxy is the right default; gating
+connections on a non-`:unset` value would mean a device on a network
+with no proxy advertisement never connects).
+
 ```elixir
-VintageNet.subscribe(["interface", "wlan0", "connection"])
-VintageNet.subscribe(VintageNetProxy.property())
-
-def handle_info({VintageNet, ["interface", _, "connection"], _, :internet, _}, state) do
-  {:noreply, connect_upstream(state, VintageNetProxy.get())}
-end
-
-def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
-  case proxy do
-    :unset -> {:noreply, state}                 # wait or skip
-    :direct -> {:noreply, connect_direct(state)}
-    :auto -> {:noreply, state}                  # use resolve(url) per request
-    %{scheme: :http} = px -> {:noreply, connect_http(state, px)}
-    %{scheme: :https} = px -> {:noreply, connect_https(state, px)}
-    %{scheme: scheme} = px when scheme in [:socks4, :socks5] ->
-      {:noreply, connect_socks(state, px)}
+defp connect(url) do
+  case VintageNetProxy.resolve(url) do
+    :direct          -> direct_connect(url)
+    %{} = descriptor -> proxied_connect(url, descriptor)
   end
 end
 ```
+
+If you do subscribe to the published property (e.g. to drop and
+reconnect when the proxy changes), treat `:unset` the same as
+`:direct`:
+
+```elixir
+VintageNet.subscribe(VintageNetProxy.property())
+
+def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
+  case proxy do
+    :unset                       -> {:noreply, reconnect(state, :direct)}
+    :direct                      -> {:noreply, reconnect(state, :direct)}
+    :auto                        -> {:noreply, reconnect(state, :auto)}
+    %{scheme: _} = descriptor    -> {:noreply, reconnect(state, descriptor)}
+  end
+end
+```
+
+The `:auto` sentinel means "PAC is loaded; call `resolve/1` per
+URL." It's distinct from `:unset` (no proxy intent / no PAC loaded
+yet) so consumers can opt out of routing through a stale PAC during
+the boot window.
 
 ## Configuration
 
@@ -342,7 +359,44 @@ evaluator fits in ~150 lines of Elixir and covers the cases real
 corporate networks actually deploy. Revisit if a customer ships a PAC
 file that needs the full grammar.
 
+## Testing
+
+Unit and Selector/Interface tests run against an in-process `:gen_tcp`
+HTTP fixture and execute under `mix test`. The integration suite
+exercises the library against a real `nginx` (serving the PAC) and a
+real `tinyproxy` (the proxy the WPAD points to); see
+[`dev/README.md`](dev/README.md):
+
+```sh
+docker compose -f dev/docker-compose.yml up -d
+mix test --include integration
+docker compose -f dev/docker-compose.yml down
+```
+
+CI runs both suites on every push and PR across an Elixir 1.15 → 1.19
+matrix paired with OTP 26 → 28.
+
+### What's been verified end-to-end
+
+- `VintageNetEthernet.normalize/1` and `VintageNetWiFi.normalize/1`
+  preserve the `:proxy` field for all four shapes (`:direct`,
+  `:manual` with credentials, `:auto` with explicit `pac_url`, `:auto`
+  for DHCP-discovered WPAD).
+- A real `VintageNet.OSEventDispatcher.dispatch(["bound"], env)` with a
+  realistic udhcpc env hash (including `"wpad" => ...` from DHCP
+  option 252) flows through the udhcpc-env parser, lands as `:wpad` in
+  `dhcp_options`, and triggers a PAC fetch that publishes `:auto`.
+- An actual HTTP `GET` issued to the descriptor `resolve/1` returns
+  reaches the upstream — observable in tinyproxy's access log.
+
+The remaining gap is a deployment on real Nerves hardware against a
+network that advertises WPAD via DHCP, which is the only thing the
+host-side suite can't reproduce.
+
 ## Status
 
-Early. The PAC parser is deliberately small; real-world PAC files may
-exercise predicates this library doesn't handle.
+Production-shaped, not production-deployed. The PAC parser handles the
+patterns found in typical corporate WPAD files; real-world PAC files
+may exercise predicates this library doesn't handle (DNS-resolving
+`isInNet`, `myIpAddress`, `weekdayRange`, etc.) — extend
+`VintageNetProxy.PAC.Predicate` when a new pattern shows up.
