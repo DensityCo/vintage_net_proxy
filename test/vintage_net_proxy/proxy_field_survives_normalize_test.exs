@@ -28,7 +28,9 @@ defmodule VintageNetProxy.ProxyFieldSurvivesNormalizeTest do
 
   describe "VintageNetWiFi.normalize/1" do
     test ":proxy :direct survives" do
-      {:ok, raw_config} = VintageNet.Interface.to_raw_config("wlan0", wifi_config(%{mode: :direct}))
+      {:ok, raw_config} =
+        VintageNet.Interface.to_raw_config("wlan0", wifi_config(%{mode: :direct}))
+
       assert raw_config.source_config.proxy == %{mode: :direct}
     end
 
