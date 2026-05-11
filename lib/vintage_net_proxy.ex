@@ -6,12 +6,17 @@ defmodule VintageNetProxy do
 
   ## Property
 
-  The current proxy is published at `["proxy", "config"]` in the `VintageNet`
-  property table as one of:
+  The current proxy *model* is published at `["proxy", "config"]` in the
+  `VintageNet` property table as one of:
 
-    * `:unset` — no proxy intent and no PAC has resolved yet
+    * `:unset` — no proxy intent, or PAC intent without a loaded script
     * `:direct` — connect directly, no proxy
-    * `proxy_descriptor()` map — a proxy to use; see `t:proxy_descriptor/0`
+    * `proxy_descriptor()` map — a fixed proxy to use; see `t:proxy_descriptor/0`
+    * `:auto` — PAC-managed; call `resolve/1` per request
+
+  PAC is inherently per-URL, so for `:auto` the library does *not*
+  compress the script down to a single answer. Consumers call
+  `resolve/1` with the URL they're about to fetch.
 
   Consumers subscribe and react:
 
@@ -21,6 +26,7 @@ defmodule VintageNetProxy do
         case proxy do
           :unset -> {:noreply, state}
           :direct -> {:noreply, connect_direct(state)}
+          :auto -> {:noreply, state}  # call resolve(url) per request
           %{scheme: :http} = px -> {:noreply, connect_http(state, px)}
           %{scheme: :socks5} = px -> {:noreply, connect_socks5(state, px)}
         end
@@ -65,21 +71,18 @@ defmodule VintageNetProxy do
   Persistence and reboot-restore come for free — vintage_net already
   persists interface configurations.
 
-  ## Target URL (PAC evaluation context)
-
-  When a PAC script is loaded, it's evaluated against this URL and the
-  result is published. Typically the upstream the device cares about.
-
-      VintageNetProxy.set_target_url("https://api.example.com/")
-      VintageNetProxy.get_target_url()
-
-  ## Per-URL resolution (advanced)
+  ## Per-URL resolution
 
       VintageNetProxy.resolve("https://api.example.com/")
       #=> %{scheme: :http, host: "corp-proxy", port: 8080}
 
       VintageNetProxy.resolve("http://intranet/")
       #=> :direct
+
+  Use this in your HTTP client to pick a proxy per request. For
+  `:manual` / `:direct` configs, the answer is the same regardless of
+  URL; for `:auto` configs, the PAC script is evaluated against the
+  supplied URL.
   """
 
   alias VintageNetProxy.{Config, Selector}
@@ -100,7 +103,7 @@ defmodule VintageNetProxy do
           optional(:password) => String.t()
         }
 
-  @type proxy :: :unset | :direct | proxy_descriptor()
+  @type proxy :: :unset | :direct | :auto | proxy_descriptor()
   @type resolved :: :direct | proxy_descriptor()
 
   @doc "Property table key under which the resolved proxy is published."
@@ -115,7 +118,7 @@ defmodule VintageNetProxy do
   @spec unsubscribe() :: :ok
   def unsubscribe, do: VintageNet.unsubscribe(@property)
 
-  @doc "Current proxy configuration."
+  @doc "Current proxy model."
   @spec get() :: proxy()
   def get, do: VintageNet.get(@property, :unset)
 
@@ -130,7 +133,6 @@ defmodule VintageNetProxy do
   @spec status() :: %{
           interfaces: [String.t()],
           active_iface: String.t() | nil,
-          target_url: String.t() | nil,
           intent: Config.t() | nil,
           pac_url: String.t() | nil,
           dhcp_wpad_url: String.t() | nil,
@@ -139,18 +141,6 @@ defmodule VintageNetProxy do
           current: proxy()
         }
   def status, do: Selector.status()
-
-  @doc """
-  Set the URL used as the evaluation context for PAC scripts.
-
-  Typically the upstream the device cares about (the cloud API endpoint).
-  """
-  @spec set_target_url(String.t()) :: :ok
-  def set_target_url(url) when is_binary(url), do: Selector.set_target_url(url)
-
-  @doc "Read the current PAC evaluation target URL (or `nil` if unset)."
-  @spec get_target_url() :: String.t() | nil
-  def get_target_url, do: Selector.get_target_url()
 
   @doc """
   Resolve the proxy for a specific URL.

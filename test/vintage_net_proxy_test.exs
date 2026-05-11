@@ -40,7 +40,6 @@ defmodule VintageNetProxyTest do
       status = VintageNetProxy.status()
       assert status.interfaces == [iface]
       assert status.active_iface == nil
-      assert status.target_url == nil
       assert status.intent == nil
       assert status.dhcp_wpad_url == nil
       assert status.pac_loaded? == false
@@ -164,17 +163,6 @@ defmodule VintageNetProxyTest do
     end
   end
 
-  describe "target_url" do
-    test "set_target_url + get_target_url round-trip" do
-      assert :ok = VintageNetProxy.set_target_url("https://api.example.com/")
-      assert VintageNetProxy.get_target_url() == "https://api.example.com/"
-    end
-
-    test "get_target_url is nil before any set" do
-      assert VintageNetProxy.get_target_url() == nil
-    end
-  end
-
   describe "resolve/1" do
     test "respects manual intent regardless of URL", %{config_property: prop} do
       manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
@@ -201,24 +189,20 @@ defmodule VintageNetProxyTest do
   end
 
   describe "status/0" do
-    test "reflects interface config intent + target_url", %{config_property: prop} do
+    test "reflects interface config intent", %{config_property: prop} do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
       _ = VintageNetProxy.status()
-      VintageNetProxy.set_target_url("https://x/")
 
       status = VintageNetProxy.status()
       assert status.intent == %{mode: :direct}
-      assert status.target_url == "https://x/"
       assert status.current == :direct
     end
   end
 
   describe "intent: :auto end-to-end (fetch + evaluate)" do
-    test "explicit :pac_url is fetched and the descriptor is published",
+    test "explicit :pac_url is fetched, property goes :auto, resolve returns the descriptor",
          %{config_property: prop} do
       port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
-
-      VintageNetProxy.set_target_url("https://api.example.com/")
 
       PropertyTable.put(VintageNet, prop, %{
         type: :fake,
@@ -227,10 +211,11 @@ defmodule VintageNetProxyTest do
 
       _ = VintageNetProxy.status()
 
-      assert VintageNet.get(["proxy", "config"]) ==
-               %{scheme: :http, host: "p.corp", port: 8080}
-
+      assert VintageNet.get(["proxy", "config"]) == :auto
       assert VintageNetProxy.status().pac_loaded? == true
+
+      assert VintageNetProxy.resolve("https://api.example.com/") ==
+               %{scheme: :http, host: "p.corp", port: 8080}
     end
 
     test "DHCP-discovered WPAD URL is fetched when intent has no explicit pac_url",
@@ -244,14 +229,14 @@ defmodule VintageNetProxyTest do
 
       port = serve_once(pac)
 
-      VintageNetProxy.set_target_url("https://api.corp/")
-
       PropertyTable.put(VintageNet, dprop, %{wpad: "http://127.0.0.1:#{port}/wpad.dat"})
       _ = VintageNetProxy.status()
       PropertyTable.put(VintageNet, cprop, %{type: :fake, proxy: %{mode: :auto}})
       _ = VintageNetProxy.status()
 
-      assert VintageNet.get(["proxy", "config"]) ==
+      assert VintageNet.get(["proxy", "config"]) == :auto
+
+      assert VintageNetProxy.resolve("https://api.corp/") ==
                %{scheme: :http, host: "corp", port: 8080}
     end
 
@@ -266,8 +251,6 @@ defmodule VintageNetProxyTest do
       on_exit(fn -> :gen_tcp.close(decoy_lsock) end)
       {:ok, decoy_port} = :inet.port(decoy_lsock)
 
-      VintageNetProxy.set_target_url("https://x/")
-
       PropertyTable.put(VintageNet, dprop, %{wpad: "http://127.0.0.1:#{decoy_port}/wpad.dat"})
       _ = VintageNetProxy.status()
 
@@ -278,35 +261,10 @@ defmodule VintageNetProxyTest do
 
       _ = VintageNetProxy.status()
 
-      assert VintageNet.get(["proxy", "config"]) ==
+      assert VintageNet.get(["proxy", "config"]) == :auto
+
+      assert VintageNetProxy.resolve("https://anything/") ==
                %{scheme: :http, host: "explicit", port: 1}
-    end
-
-    test "set_target_url re-publishes against the loaded PAC without re-fetching",
-         %{config_property: prop} do
-      pac = """
-      function FindProxyForURL(url, host) {
-        if (shExpMatch(host, "*.corp.example")) return "PROXY corp:8080";
-        return "DIRECT";
-      }
-      """
-
-      port = serve_once(pac)
-
-      VintageNetProxy.set_target_url("https://api.corp.example/")
-
-      PropertyTable.put(VintageNet, prop, %{
-        type: :fake,
-        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
-      })
-
-      _ = VintageNetProxy.status()
-
-      assert VintageNet.get(["proxy", "config"]) ==
-               %{scheme: :http, host: "corp", port: 8080}
-
-      VintageNetProxy.set_target_url("https://google.com/")
-      assert VintageNet.get(["proxy", "config"]) == :direct
     end
 
     test "end-to-end with a representative enterprise WPAD",
@@ -323,8 +281,6 @@ defmodule VintageNetProxyTest do
 
       port = serve_once(wpad)
 
-      VintageNetProxy.set_target_url("https://api.corp.example.com/")
-
       PropertyTable.put(VintageNet, prop, %{
         type: :fake,
         proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
@@ -332,7 +288,10 @@ defmodule VintageNetProxyTest do
 
       _ = VintageNetProxy.status()
 
-      assert VintageNet.get(["proxy", "config"]) == :direct
+      # PAC is loaded → property goes :auto. Per-URL routing via resolve/1.
+      assert VintageNet.get(["proxy", "config"]) == :auto
+
+      assert VintageNetProxy.resolve("https://api.corp.example.com/") == :direct
       assert VintageNetProxy.resolve("http://intranet/") == :direct
 
       assert VintageNetProxy.resolve("https://www.google.com/") ==
@@ -341,7 +300,7 @@ defmodule VintageNetProxyTest do
       assert VintageNetProxy.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
     end
 
-    test "resolve/1 evaluates the PAC against the supplied URL, not the target",
+    test "resolve/1 evaluates the PAC against the supplied URL",
          %{config_property: prop} do
       pac = """
       function FindProxyForURL(url, host) {
@@ -351,8 +310,6 @@ defmodule VintageNetProxyTest do
       """
 
       port = serve_once(pac)
-
-      VintageNetProxy.set_target_url("https://api.corp.example/")
 
       PropertyTable.put(VintageNet, prop, %{
         type: :fake,
@@ -367,7 +324,7 @@ defmodule VintageNetProxyTest do
                %{scheme: :http, host: "corp", port: 8080}
     end
 
-    test "connection rising to :internet triggers fetch + publish",
+    test "connection rising to :internet triggers fetch and flips property to :auto",
          %{config_property: cprop, connection_property: connprop} do
       # Start the test with the interface marked offline so the initial
       # refresh skips the fetch.
@@ -376,8 +333,6 @@ defmodule VintageNetProxyTest do
 
       port =
         serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
-
-      VintageNetProxy.set_target_url("https://api.example.com/")
 
       PropertyTable.put(VintageNet, cprop, %{
         type: :fake,
@@ -390,7 +345,9 @@ defmodule VintageNetProxyTest do
       PropertyTable.put(VintageNet, connprop, :internet)
       _ = VintageNetProxy.status()
 
-      assert VintageNet.get(["proxy", "config"]) ==
+      assert VintageNet.get(["proxy", "config"]) == :auto
+
+      assert VintageNetProxy.resolve("https://api.example.com/") ==
                %{scheme: :http, host: "p.corp", port: 8080}
     end
   end
@@ -476,7 +433,6 @@ defmodule VintageNetProxyTest do
     test "drops cached PAC when an interface disconnects",
          %{primary: primary} do
       port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p:1"; }|)
-      VintageNetProxy.set_target_url("https://x/")
 
       PropertyTable.put(VintageNet, ["interface", primary, "config"], %{
         type: :fake,

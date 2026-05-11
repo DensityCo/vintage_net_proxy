@@ -11,14 +11,20 @@ subscriptions.
 
 ## Property surface
 
-The current proxy is published at `["proxy", "config"]` in the `VintageNet`
-property table as one of:
+The current proxy *model* is published at `["proxy", "config"]` in the
+`VintageNet` property table as one of:
 
 | Value | Meaning |
 |---|---|
-| `:unset` | No proxy intent and no PAC has resolved yet |
+| `:unset` | No proxy intent, or PAC intent without a loaded script yet |
 | `:direct` | Bypass any proxy; connect directly |
-| `proxy_descriptor` | A map describing a proxy to use |
+| `proxy_descriptor` | A fixed proxy to use for everything |
+| `:auto` | PAC-managed — call `VintageNetProxy.resolve(url)` per request |
+
+PAC is inherently per-URL, so for `:auto` the library does not compress
+the script down to a single descriptor. The published value is the
+sentinel `:auto`; consumers route each outbound URL through
+`resolve/1` for a concrete answer.
 
 The `proxy_descriptor` map looks like:
 
@@ -50,6 +56,7 @@ def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
   case proxy do
     :unset -> {:noreply, state}                 # wait or skip
     :direct -> {:noreply, connect_direct(state)}
+    :auto -> {:noreply, state}                  # use resolve(url) per request
     %{scheme: :http} = px -> {:noreply, connect_http(state, px)}
     %{scheme: :https} = px -> {:noreply, connect_https(state, px)}
     %{scheme: scheme} = px when scheme in [:socks4, :socks5] ->
@@ -169,22 +176,11 @@ interface configurations (encrypted, with the same machinery that hides
 WiFi passphrases), so the `:proxy` field gets persisted alongside the
 rest of the interface config and is restored on boot automatically.
 
-## Target URL (PAC evaluation context)
+## Per-URL resolution
 
-```elixir
-VintageNetProxy.set_target_url("https://api.example.com/")
-VintageNetProxy.get_target_url()
-```
-
-When a PAC script is loaded, it's evaluated against this URL and the
-result is published. Set this to the upstream the device cares about —
-typically the cloud API endpoint. If unset, PAC evaluates against
-`"http://localhost/"`, which falls through to the script's default branch.
-
-## Per-URL resolution (advanced)
-
-If you have a generic HTTP client that needs per-URL routing, use
-`resolve/1` instead of subscribing:
+PAC scripts are a function from URL → proxy decision, so for `:auto`
+mode the published property is the sentinel `:auto`, not a descriptor.
+Consumers call `resolve/1` per request:
 
 ```elixir
 VintageNetProxy.resolve("https://api.example.com/")
@@ -194,8 +190,10 @@ VintageNetProxy.resolve("http://intranet/")
 #=> :direct
 ```
 
-Most embedded devices talk to a known set of upstreams and can use the
-property-subscription pattern instead.
+For `:manual` and `:direct` modes the answer is the same regardless of
+URL, so subscribing to `["proxy", "config"]` is enough. Embedded devices
+that talk to a single known upstream can also just call `resolve/1`
+once with that URL and use the result.
 
 ## DHCP Option 252 wiring
 
