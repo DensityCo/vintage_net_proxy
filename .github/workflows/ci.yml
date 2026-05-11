@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+
+    env:
+      MIX_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ runner.os }}-${{ hashFiles('mix.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Cache _build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: build-${{ runner.os }}-${{ hashFiles('mix.lock') }}
+          restore-keys: build-${{ runner.os }}-
+
+      - name: Fetch deps
+        run: mix deps.get
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+  integration:
+    name: Integration tests (dev/ stack)
+    runs-on: ubuntu-latest
+
+    env:
+      MIX_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Erlang/OTP and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-${{ runner.os }}-${{ hashFiles('mix.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Cache _build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: build-${{ runner.os }}-${{ hashFiles('mix.lock') }}
+          restore-keys: build-${{ runner.os }}-
+
+      - name: Fetch deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Start dev stack
+        run: docker compose -f dev/docker-compose.yml up -d
+
+      - name: Wait for services
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://localhost:18080/wpad.dat > /dev/null \
+               && timeout 1 bash -c "</dev/tcp/localhost/18888" 2>/dev/null; then
+              echo "services reachable"
+              exit 0
+            fi
+            echo "waiting for services ($i/30)"
+            sleep 1
+          done
+          echo "timeout waiting for dev stack"
+          docker compose -f dev/docker-compose.yml ps
+          docker compose -f dev/docker-compose.yml logs
+          exit 1
+
+      - name: Run integration tests
+        run: mix test --only integration
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose -f dev/docker-compose.yml logs
+
+      - name: Tear down dev stack
+        if: always()
+        run: docker compose -f dev/docker-compose.yml down
