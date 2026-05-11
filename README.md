@@ -156,28 +156,28 @@ re-fetches against the (possibly new) network.
 
 ```
 VintageNetProxy.Supervisor
-├── VintageNetProxy.Registry            (Interface lookup by name)
-├── VintageNetProxy.InterfaceSupervisor (DynamicSupervisor)
-│   ├── VintageNetProxy.Interface ("eth0")
-│   └── VintageNetProxy.Interface ("wlan0")
-└── VintageNetProxy.Selector            (picks active + publishes globally)
+└── VintageNetProxy.Selector  (one GenServer)
 ```
 
-Each `Interface` is a small GenServer that owns one interface's
-subscriptions, PAC fetch lifecycle, and proxy-value computation
-(direct / manual descriptor / `:auto` / `:unset`). It keeps the
-state private. On any state change it calls
-`Selector.notify_changed/0`.
+The single `Selector` GenServer subscribes to each tracked interface's
+`config`, `dhcp_options`, and `connection` PropertyTable keys, and
+holds `%{iface => %Interface{}}` in its state. On each property event
+it routes to the matching `Interface.on_config/2`,
+`Interface.on_dhcp_options/2`, or `Interface.on_connection/2`,
+updates that interface's struct, walks the priority list to pick the
+first `eligible?` one, and publishes `Interface.value/1` to the
+global `["proxy", "config"]`.
 
-The `Selector` is a thin priority picker. It reads each Interface's
-snapshot via `Interface.snapshot/1`, walks the list to find the first
-`eligible?` one, and publishes that interface's `:value` to the global
-`["proxy", "config"]`. The Selector doesn't know about modes — that
-logic lives in Interface where the data does.
+`VintageNetProxy.Interface` is a **pure data module** — a struct plus
+state-transition functions (`on_*`, `eligible?`, `value`, `resolve`,
+`snapshot`). It has no process of its own; the Selector owns the only
+mailbox. The mode-to-value mapping (direct / manual descriptor /
+`:auto` / `:unset`) lives in `Interface.value/1`, next to the state
+that determines it.
 
-`Selector.status/0` pulls fresh snapshots from every Interface,
-which also serves as a sync barrier (all queued property events on
-the Interfaces drain before `status/0` returns).
+`Selector.status/0` reads its own state synchronously — no fan-out
+calls, no sync barrier needed. The single mailbox imposes a total
+order on events and on publishes.
 
 ## Persistence
 

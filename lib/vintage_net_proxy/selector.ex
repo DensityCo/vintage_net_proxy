@@ -6,7 +6,7 @@ defmodule VintageNetProxy.Selector do
 
   @property ["proxy", "config"]
 
-  defstruct interfaces: []
+  defstruct interfaces: [], states: %{}
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -15,35 +15,28 @@ defmodule VintageNetProxy.Selector do
   def status, do: GenServer.call(__MODULE__, :status)
   def resolve(url), do: GenServer.call(__MODULE__, {:resolve, url})
 
-  @doc "Notify the Selector that an Interface's state has changed."
-  def notify_changed, do: GenServer.cast(__MODULE__, :changed)
-
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, []) || []
 
     Enum.each(interfaces, fn iface ->
-      case DynamicSupervisor.start_child(
-             VintageNetProxy.InterfaceSupervisor,
-             {Interface, iface: iface}
-           ) do
-        {:ok, _pid} -> :ok
-        {:error, {:already_started, _pid}} -> :ok
-      end
+      Enum.each(["config", "dhcp_options", "connection"], fn prop ->
+        VintageNet.subscribe(["interface", iface, prop])
+      end)
     end)
 
-    state = %__MODULE__{interfaces: interfaces}
-    recompute(state)
+    states = Map.new(interfaces, fn iface -> {iface, Interface.load(iface)} end)
+    state = %__MODULE__{interfaces: interfaces, states: states}
+    publish(state)
     {:ok, state}
   end
 
   @impl true
   def handle_call(:status, _from, state) do
-    snapshots = fetch_snapshots(state)
-    publish(snapshots, state.interfaces)
-
     by_interface =
-      Map.new(snapshots, fn {iface, snap} ->
+      Map.new(state.states, fn {iface, s} ->
+        snap = Interface.snapshot(s)
+
         {iface,
          %{
            intent: snap.intent,
@@ -54,7 +47,7 @@ defmodule VintageNetProxy.Selector do
          }}
       end)
 
-    active = find_active(snapshots, state.interfaces)
+    active = find_active(state)
 
     reply = %{
       interfaces: state.interfaces,
@@ -68,44 +61,52 @@ defmodule VintageNetProxy.Selector do
 
   def handle_call({:resolve, url}, _from, state) do
     reply =
-      case find_active(fetch_snapshots(state), state.interfaces) do
+      case find_active(state) do
         nil -> :direct
-        snap -> Interface.resolve(snap.iface, url)
+        iface_state -> Interface.resolve(iface_state, url)
       end
 
     {:reply, reply, state}
   end
 
   @impl true
-  def handle_cast(:changed, state) do
-    recompute(state)
-    {:noreply, state}
-  end
+  def handle_info({VintageNet, ["interface", iface, "config"], _o, new, _m}, state),
+    do: {:noreply, update(state, iface, &Interface.on_config(&1, new))}
 
-  @impl true
+  def handle_info({VintageNet, ["interface", iface, "dhcp_options"], _o, new, _m}, state),
+    do: {:noreply, update(state, iface, &Interface.on_dhcp_options(&1, new))}
+
+  def handle_info({VintageNet, ["interface", iface, "connection"], _o, new, _m}, state),
+    do: {:noreply, update(state, iface, &Interface.on_connection(&1, new))}
+
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp recompute(state),
-    do: publish(fetch_snapshots(state), state.interfaces)
+  defp update(state, iface, fun) do
+    case Map.fetch(state.states, iface) do
+      {:ok, iface_state} ->
+        new_state = %{state | states: Map.put(state.states, iface, fun.(iface_state))}
+        publish(new_state)
+        new_state
 
-  defp publish(snapshots, interfaces) do
+      :error ->
+        state
+    end
+  end
+
+  defp publish(state) do
     value =
-      case find_active(snapshots, interfaces) do
+      case find_active(state) do
         nil -> :unset
-        snap -> snap.value
+        iface_state -> Interface.value(iface_state)
       end
 
     PropertyTable.put(VintageNet, @property, value)
   end
 
-  defp find_active(snapshots, interfaces) do
-    Enum.find_value(interfaces, fn iface ->
-      snap = Map.fetch!(snapshots, iface)
-      if snap.eligible?, do: snap
+  defp find_active(state) do
+    Enum.find_value(state.interfaces, fn iface ->
+      s = Map.get(state.states, iface)
+      if s && Interface.eligible?(s), do: s
     end)
-  end
-
-  defp fetch_snapshots(state) do
-    Map.new(state.interfaces, fn iface -> {iface, Interface.snapshot(iface)} end)
   end
 end
