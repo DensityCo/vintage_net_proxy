@@ -16,15 +16,21 @@ defmodule VintageNetProxy.Roster do
     do: %__MODULE__{interfaces: interfaces, states: iface_states}
 
   @doc """
-  Build a roster for `interfaces` by reading each one's initial state from the
-  VintageNet PropertyTable (impure counterpart to `new/2`).
+  Store the latest snapshot for `iface`. No-op if `iface` isn't in this
+  roster's priority list (interfaces outside the configured set are ignored).
   """
-  @spec load([String.t()]) :: t()
-  def load(interfaces),
-    do: new(interfaces, Map.new(interfaces, fn iface -> {iface, Interface.load(iface)} end))
+  @spec put_iface(t(), String.t(), Interface.t()) :: t()
+  def put_iface(state, iface, iface_state) do
+    if iface in state.interfaces do
+      %{state | states: Map.put(state.states, iface, iface_state)}
+    else
+      state
+    end
+  end
 
   @doc """
-  Apply `fun` to the state of `iface`. No-op if `iface` isn't in this Selector's list.
+  Apply `fun` to the state of `iface`. No-op if `iface` isn't in this
+  roster's priority list, or has no state yet.
   """
   @spec update_iface(t(), String.t(), (Interface.t() -> Interface.t())) :: t()
   def update_iface(state, iface, fun) do
@@ -59,17 +65,24 @@ defmodule VintageNetProxy.Roster do
   @spec status(t(), term()) :: map()
   def status(state, published) do
     by_interface =
-      Map.new(state.states, fn {iface, s} ->
-        snap = Interface.snapshot(s)
+      Map.new(state.interfaces, fn iface ->
+        case Map.get(state.states, iface) do
+          nil ->
+            {iface,
+             %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}}
 
-        {iface,
-         %{
-           intent: snap.intent,
-           connection: snap.connection,
-           dhcp_wpad_url: snap.dhcp_wpad_url,
-           pac_url: snap.pac_url,
-           pac_loaded?: snap.pac_loaded?
-         }}
+          s ->
+            snap = Interface.snapshot(s)
+
+            {iface,
+             %{
+               intent: snap.intent,
+               connection: snap.connection,
+               dhcp_wpad_url: snap.dhcp_wpad_url,
+               pac_url: snap.pac_url,
+               pac_loaded?: snap.pac_loaded?
+             }}
+        end
       end)
 
     %{

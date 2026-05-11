@@ -171,6 +171,32 @@ defmodule VintageNetProxy.RosterTest do
     end
   end
 
+  describe "put_iface/3" do
+    test "stores a fresh snapshot for an interface in the priority list" do
+      s = Roster.new(["eth0"], %{})
+      snap = iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)
+      s = Roster.put_iface(s, "eth0", snap)
+      assert Map.get(s.states, "eth0") == snap
+      assert Roster.value(s) == :direct
+    end
+
+    test "replaces an existing snapshot" do
+      old = iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)
+      s = state([old])
+      new = iface(iface: "eth0", intent: nil, connection: :internet)
+      s = Roster.put_iface(s, "eth0", new)
+      assert Map.get(s.states, "eth0") == new
+      assert Roster.value(s) == :unset
+    end
+
+    test "no-op for an interface not in the priority list" do
+      s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
+      ghost = iface(iface: "wlan0", intent: %{mode: :direct}, connection: :internet)
+      s = Roster.put_iface(s, "wlan0", ghost)
+      refute Map.has_key?(s.states, "wlan0")
+    end
+  end
+
   describe "update_iface/3" do
     test "applies fun to the named interface's state" do
       eth0 = iface(iface: "eth0", intent: nil, connection: :internet)

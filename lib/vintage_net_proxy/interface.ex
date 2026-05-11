@@ -1,5 +1,6 @@
 defmodule VintageNetProxy.Interface do
   @moduledoc false
+  use GenServer
 
   require Logger
 
@@ -21,32 +22,45 @@ defmodule VintageNetProxy.Interface do
           connection: atom() | nil
         }
 
-  @doc "Subscribe the calling process to the PropertyTable keys these interfaces emit."
-  def subscribe(ifaces) when is_list(ifaces) do
-    Enum.each(ifaces, fn iface ->
-      Enum.each(["config", "dhcp_options", "connection"], fn prop ->
-        VintageNet.subscribe(["interface", iface, prop])
-      end)
-    end)
+  # --- Client API ---
+
+  def start_link(opts) do
+    iface = Keyword.fetch!(opts, :iface)
+    GenServer.start_link(__MODULE__, opts, name: via(iface))
   end
 
-  @doc "Build initial state by reading current PropertyTable values."
-  def load(iface) do
-    %__MODULE__{iface: iface}
-    |> put_connection(VintageNet.get(["interface", iface, "connection"]))
-    |> put_intent(VintageNet.get(["interface", iface, "config"]))
-    |> put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
-    |> refresh_pac()
+  def child_spec(opts) do
+    iface = Keyword.fetch!(opts, :iface)
+
+    %{
+      id: {__MODULE__, iface},
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker
+    }
   end
 
-  @doc "Handle a `[\"interface\", iface, \"config\"]` change."
-  def on_config(state, raw), do: state |> put_intent(raw) |> refresh_pac()
+  @doc "Synchronously fetch the current state for `iface` (blocks on its mailbox)."
+  def get(iface), do: GenServer.call(via(iface), :get_state)
 
-  @doc "Handle a `[\"interface\", iface, \"dhcp_options\"]` change."
-  def on_dhcp_options(state, opts), do: state |> put_dhcp_options(opts) |> refresh_pac()
+  defp via(iface), do: {:via, Registry, {VintageNetProxy.InterfaceRegistry, iface}}
 
-  @doc "Handle a `[\"interface\", iface, \"connection\"]` change."
-  def on_connection(state, conn), do: state |> put_connection(conn) |> refresh_pac()
+  # --- Pure helpers (operate on the struct) ---
+
+  @doc """
+  The URL the Interface will fetch right now, or `nil` if no fetch is
+  applicable (intent isn't `:auto`, connection isn't up, or no URL is
+  available from intent or DHCP).
+  """
+  @spec effective_pac_url(t()) :: String.t() | nil
+  def effective_pac_url(%{connection: c}) when c not in @up_states, do: nil
+
+  def effective_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
+    do: url
+
+  def effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
+    do: url
+
+  def effective_pac_url(_), do: nil
 
   @doc "True iff this interface has an intent and is connected enough to serve it."
   def eligible?(state),
@@ -82,11 +96,110 @@ defmodule VintageNetProxy.Interface do
       connection: state.connection,
       pac_loaded?: not is_nil(state.pac_script),
       dhcp_wpad_url: state.dhcp_wpad_url,
-      pac_url: effective_pac_url(state)
+      pac_url: configured_pac_url(state)
     }
   end
 
-  # --- pure setters ---
+  # --- GenServer ---
+
+  @impl true
+  def init(opts) do
+    iface = Keyword.fetch!(opts, :iface)
+    parent = Keyword.fetch!(opts, :parent)
+
+    Enum.each(["config", "dhcp_options", "connection"], fn prop ->
+      VintageNet.subscribe(["interface", iface, prop])
+    end)
+
+    # Read current PropertyTable values synchronously (fast) but defer the
+    # blocking PAC fetch to handle_continue so Supervisor.start_link returns
+    # promptly. Fetches across multiple interfaces run in parallel because
+    # each Interface owns its own process.
+    state =
+      %__MODULE__{iface: iface}
+      |> put_connection(VintageNet.get(["interface", iface, "connection"]))
+      |> put_intent(VintageNet.get(["interface", iface, "config"]))
+      |> put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
+
+    {:ok, {state, parent}, {:continue, :startup}}
+  end
+
+  @impl true
+  def handle_continue(:startup, {state, parent}) do
+    state = maybe_fetch(state)
+    push(parent, state)
+    {:noreply, {state, parent}}
+  end
+
+  @impl true
+  def handle_call(:get_state, _from, {state, _parent} = ps), do: {:reply, state, ps}
+
+  @impl true
+  def handle_info({VintageNet, ["interface", _, "config"], _o, new, _m}, ps),
+    do: handle_event(ps, &put_intent(&1, new))
+
+  def handle_info({VintageNet, ["interface", _, "dhcp_options"], _o, new, _m}, ps),
+    do: handle_event(ps, &put_dhcp_options(&1, new))
+
+  def handle_info({VintageNet, ["interface", _, "connection"], _o, new, _m}, ps),
+    do: handle_event(ps, &put_connection(&1, new))
+
+  def handle_info(_msg, ps), do: {:noreply, ps}
+
+  # --- Internals ---
+
+  defp handle_event({state, parent}, change_fn) do
+    state =
+      state
+      |> transition(change_fn)
+      |> maybe_fetch()
+
+    push(parent, state)
+    {:noreply, {state, parent}}
+  end
+
+  # Apply the field-level change, then drop pac_script if the effective
+  # PAC URL changed. Same URL before-and-after preserves the cached script
+  # (free dedup); any other transition invalidates so the next fetch can
+  # populate from the new URL.
+  defp transition(state, change_fn) do
+    old_url = effective_pac_url(state)
+    new_state = change_fn.(state)
+
+    if effective_pac_url(new_state) == old_url do
+      new_state
+    else
+      %{new_state | pac_script: nil}
+    end
+  end
+
+  # Synchronous fetch inside the Interface's own mailbox. Blocking is fine
+  # here — the Selector and other interfaces are unaffected.
+  defp maybe_fetch(state) do
+    case fetch_target(state) do
+      nil ->
+        state
+
+      url ->
+        case Fetcher.get(url) do
+          {:ok, script} ->
+            %{state | pac_script: script}
+
+          {:error, reason} ->
+            Logger.warning(
+              "VintageNetProxy: PAC fetch failed on #{state.iface} (#{inspect(url)}): #{inspect(reason)}"
+            )
+
+            state
+        end
+    end
+  end
+
+  defp fetch_target(state) do
+    if is_nil(state.pac_script), do: effective_pac_url(state), else: nil
+  end
+
+  defp push(parent, state), do: send(parent, {:interface_changed, state.iface, state})
 
   defp put_connection(state, conn), do: %{state | connection: conn}
 
@@ -108,38 +221,11 @@ defmodule VintageNetProxy.Interface do
 
   defp put_dhcp_options(state, _), do: %{state | dhcp_wpad_url: nil}
 
-  # --- side-effecting: PAC fetch ---
-
-  defp refresh_pac(%{connection: c} = state) when c not in @up_states,
-    do: %{state | pac_script: nil}
-
-  defp refresh_pac(state) do
-    case effective_pac_url(state) do
-      nil ->
-        %{state | pac_script: nil}
-
-      url ->
-        case Fetcher.get(url) do
-          {:ok, script} ->
-            %{state | pac_script: script}
-
-          {:error, reason} ->
-            Logger.warning(
-              "VintageNetProxy: PAC fetch failed on #{state.iface} " <>
-                "(#{inspect(url)}): #{inspect(reason)}"
-            )
-
-            state
-        end
-    end
-  end
-
-  # Explicit :pac_url in the intent wins; otherwise fall back to DHCP wpad.
-  defp effective_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
+  defp configured_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
     do: url
 
-  defp effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
+  defp configured_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
     do: url
 
-  defp effective_pac_url(_), do: nil
+  defp configured_pac_url(_), do: nil
 end

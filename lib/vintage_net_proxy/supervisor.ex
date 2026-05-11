@@ -2,10 +2,20 @@ defmodule VintageNetProxy.Supervisor do
   @moduledoc """
   Top-level supervision tree for the proxy library.
 
-  Owns a single child — `VintageNetProxy.Selector` — which holds
-  per-interface state, subscribes to the relevant VintageNet
-  PropertyTable keys, picks the active interface, and publishes the
-  global `["proxy", "config"]` property.
+  Children, in start order:
+
+    1. `VintageNetProxy.InterfaceRegistry` — registry that maps an iface
+       name to its `Interface` GenServer.
+    2. `VintageNetProxy.Selector` — aggregates per-interface snapshots and
+       publishes the chosen proxy value.
+    3. `VintageNetProxy.InterfaceSupervisor` — one `Interface` GenServer
+       per configured interface, supervised `:one_for_one` so a crash in
+       one interface doesn't disturb the others.
+
+  Top-level strategy is `:rest_for_one`: a Selector crash also restarts
+  the InterfaceSupervisor (so Interfaces re-push their state to a fresh
+  Selector). An Interface crash is isolated within the
+  InterfaceSupervisor and doesn't ripple to siblings.
 
   Start it with the list of interfaces to track:
 
@@ -17,13 +27,22 @@ defmodule VintageNetProxy.Supervisor do
   """
   use Supervisor
 
+  alias VintageNetProxy.{InterfaceSupervisor, Selector}
+
   def start_link(opts \\ []) do
     Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @impl true
   def init(opts) do
-    interfaces = Keyword.get(opts, :interfaces, [])
-    Supervisor.init([{VintageNetProxy.Selector, interfaces: interfaces}], strategy: :one_for_one)
+    interfaces = Keyword.get(opts, :interfaces, []) || []
+
+    children = [
+      {Registry, keys: :unique, name: VintageNetProxy.InterfaceRegistry},
+      {Selector, interfaces: interfaces},
+      {InterfaceSupervisor, interfaces: interfaces}
+    ]
+
+    Supervisor.init(children, strategy: :rest_for_one)
   end
 end

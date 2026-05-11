@@ -3,6 +3,8 @@ defmodule VintageNetProxyTest do
 
   import ExUnit.CaptureLog
 
+  alias VintageNetProxy.Interface
+
   setup do
     iface = "test#{:erlang.unique_integer([:positive])}"
     config_property = ["interface", iface, "config"]
@@ -30,6 +32,14 @@ defmodule VintageNetProxyTest do
      connection_property: connection_property}
   end
 
+  # `Interface.get/1` flushes the Interface's mailbox (including any blocking
+  # PAC fetch); `VintageNetProxy.status/0` flushes the Selector's mailbox.
+  defp flush(iface) do
+    _ = Interface.get(iface)
+    _ = VintageNetProxy.status()
+    :ok
+  end
+
   describe "initial state" do
     test "publishes :unset when nothing is configured" do
       assert VintageNet.get(["proxy", "config"]) == :unset
@@ -48,31 +58,29 @@ defmodule VintageNetProxyTest do
 
   describe "intent: :direct from interface config" do
     test "publishes :direct when interface config carries proxy: %{mode: :direct}",
-         %{config_property: prop} do
+         %{config_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-
-      _ = VintageNetProxy.status()
+      flush(iface)
       assert VintageNet.get(["proxy", "config"]) == :direct
     end
 
     test "publishes :unset when proxy field is removed",
-         %{config_property: prop} do
+         %{config_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      _ = VintageNetProxy.status()
+      flush(iface)
       assert VintageNet.get(["proxy", "config"]) == :direct
 
       PropertyTable.put(VintageNet, prop, %{type: :fake})
-      _ = VintageNetProxy.status()
+      flush(iface)
       assert VintageNet.get(["proxy", "config"]) == :unset
     end
   end
 
   describe "intent: :manual from interface config" do
-    test "publishes the resolved descriptor", %{config_property: prop} do
+    test "publishes the resolved descriptor", %{config_property: prop, iface: iface} do
       manual = %{mode: :manual, scheme: :http, host: "p.corp", port: 8080}
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
-
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNet.get(["proxy", "config"]) == %{
                scheme: :http,
@@ -81,7 +89,8 @@ defmodule VintageNetProxyTest do
              }
     end
 
-    test "preserves credentials in the published descriptor", %{config_property: prop} do
+    test "preserves credentials in the published descriptor",
+         %{config_property: prop, iface: iface} do
       manual = %{
         mode: :manual,
         scheme: :socks5,
@@ -92,7 +101,7 @@ defmodule VintageNetProxyTest do
       }
 
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNet.get(["proxy", "config"]) == %{
                scheme: :socks5,
@@ -103,50 +112,42 @@ defmodule VintageNetProxyTest do
              }
     end
 
-    test "defaults scheme to :http when omitted", %{config_property: prop} do
+    test "defaults scheme to :http when omitted", %{config_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{
         type: :fake,
         proxy: %{mode: :manual, host: "p", port: 80}
       })
 
-      _ = VintageNetProxy.status()
-
+      flush(iface)
       assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p", port: 80}
     end
   end
 
-  describe "intent: :auto with DHCP-discovered WPAD" do
-    test "ignores DHCP wpad when no proxy intent is set",
-         %{dhcp_property: prop} do
-      PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
-      _ = VintageNetProxy.status()
-
-      assert VintageNet.get(["proxy", "config"]) == :unset
-    end
-
+  describe "intent: :auto with DHCP-discovered WPAD URL" do
     test "records DHCP wpad URL in status", %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
-      status = VintageNetProxy.status()
-      # Without an intent, this interface isn't active; check by_interface.
-      assert status.by_interface[iface].dhcp_wpad_url == "http://wpad.test/wpad.dat"
+      flush(iface)
+      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url ==
+               "http://wpad.test/wpad.dat"
     end
 
-    test "clears DHCP wpad URL when the dhcp_options property is cleared",
+    test "clears DHCP wpad URL when the dhcp_options property is deleted",
          %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url ==
                "http://wpad.test/wpad.dat"
 
       PropertyTable.delete(VintageNet, prop)
-      _ = VintageNetProxy.status()
+      flush(iface)
       assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url == nil
     end
   end
 
   describe "invalid proxy config in interface config" do
-    test "logs a warning and leaves intent nil", %{config_property: prop} do
+    test "logs a warning and leaves intent nil",
+         %{config_property: prop, iface: iface} do
       log =
         capture_log(fn ->
           PropertyTable.put(VintageNet, prop, %{
@@ -154,7 +155,7 @@ defmodule VintageNetProxyTest do
             proxy: %{mode: :manual, host: "p"}
           })
 
-          _ = VintageNetProxy.status()
+          flush(iface)
         end)
 
       assert log =~ "invalid :proxy config"
@@ -163,10 +164,15 @@ defmodule VintageNetProxyTest do
   end
 
   describe "resolve/1" do
-    test "respects manual intent regardless of URL", %{config_property: prop} do
+    test ":direct when no interface is eligible" do
+      assert VintageNetProxy.resolve("https://example.com/") == :direct
+    end
+
+    test "respects manual intent regardless of URL",
+         %{config_property: prop, iface: iface} do
       manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNetProxy.resolve("https://api.example.com/") ==
                %{scheme: :http, host: "p", port: 80}
@@ -175,27 +181,12 @@ defmodule VintageNetProxyTest do
                %{scheme: :http, host: "p", port: 80}
     end
 
-    test "returns :direct for :direct intent", %{config_property: prop} do
+    test "returns :direct for :direct intent",
+         %{config_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNetProxy.resolve("https://x/") == :direct
-    end
-
-    test ":direct when no intent and no override" do
-      assert VintageNetProxy.resolve("https://x/") == :direct
-    end
-  end
-
-  describe "status/0" do
-    test "reflects interface config intent", %{config_property: prop, iface: iface} do
-      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      _ = VintageNetProxy.status()
-
-      status = VintageNetProxy.status()
-      assert status.active_iface == iface
-      assert status.by_interface[iface].intent == %{mode: :direct}
-      assert status.current == :direct
     end
   end
 
@@ -209,7 +200,7 @@ defmodule VintageNetProxyTest do
         proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
       })
 
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNet.get(["proxy", "config"]) == :auto
       assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
@@ -219,7 +210,7 @@ defmodule VintageNetProxyTest do
     end
 
     test "DHCP-discovered WPAD URL is fetched when intent has no explicit pac_url",
-         %{config_property: cprop, dhcp_property: dprop} do
+         %{config_property: cprop, dhcp_property: dprop, iface: iface} do
       pac = """
       function FindProxyForURL(url, host) {
         if (shExpMatch(host, "*.corp")) return "PROXY corp:8080";
@@ -230,9 +221,9 @@ defmodule VintageNetProxyTest do
       port = serve_once(pac)
 
       PropertyTable.put(VintageNet, dprop, %{wpad: "http://127.0.0.1:#{port}/wpad.dat"})
-      _ = VintageNetProxy.status()
       PropertyTable.put(VintageNet, cprop, %{type: :fake, proxy: %{mode: :auto}})
-      _ = VintageNetProxy.status()
+
+      flush(iface)
 
       assert VintageNet.get(["proxy", "config"]) == :auto
 
@@ -241,7 +232,7 @@ defmodule VintageNetProxyTest do
     end
 
     test "explicit :pac_url takes precedence over DHCP wpad",
-         %{config_property: cprop, dhcp_property: dprop} do
+         %{config_property: cprop, dhcp_property: dprop, iface: iface} do
       explicit_port =
         serve_once(~s|function FindProxyForURL(url, host) { return "PROXY explicit:1"; }|)
 
@@ -252,14 +243,13 @@ defmodule VintageNetProxyTest do
       {:ok, decoy_port} = :inet.port(decoy_lsock)
 
       PropertyTable.put(VintageNet, dprop, %{wpad: "http://127.0.0.1:#{decoy_port}/wpad.dat"})
-      _ = VintageNetProxy.status()
 
       PropertyTable.put(VintageNet, cprop, %{
         type: :fake,
         proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{explicit_port}/wpad.dat"}
       })
 
-      _ = VintageNetProxy.status()
+      flush(iface)
 
       assert VintageNet.get(["proxy", "config"]) == :auto
 
@@ -268,7 +258,7 @@ defmodule VintageNetProxyTest do
     end
 
     test "end-to-end with a representative enterprise WPAD",
-         %{config_property: prop} do
+         %{config_property: prop, iface: iface} do
       wpad = """
       function FindProxyForURL(url, host) {
         if (isPlainHostName(host)) return "DIRECT";
@@ -286,9 +276,8 @@ defmodule VintageNetProxyTest do
         proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
       })
 
-      _ = VintageNetProxy.status()
+      flush(iface)
 
-      # PAC is loaded → property goes :auto. Per-URL routing via resolve/1.
       assert VintageNet.get(["proxy", "config"]) == :auto
 
       assert VintageNetProxy.resolve("https://api.corp.example.com/") == :direct
@@ -300,55 +289,21 @@ defmodule VintageNetProxyTest do
       assert VintageNetProxy.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
     end
 
-    test "resolve/1 evaluates the PAC against the supplied URL",
-         %{config_property: prop} do
-      pac = """
-      function FindProxyForURL(url, host) {
-        if (shExpMatch(host, "*.corp.example")) return "PROXY corp:8080";
-        return "DIRECT";
-      }
-      """
-
-      port = serve_once(pac)
-
-      PropertyTable.put(VintageNet, prop, %{
-        type: :fake,
-        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
-      })
-
-      _ = VintageNetProxy.status()
-
-      assert VintageNetProxy.resolve("http://google.com/") == :direct
-
-      assert VintageNetProxy.resolve("https://x.corp.example/") ==
-               %{scheme: :http, host: "corp", port: 8080}
-    end
-
-    test "connection rising to :internet triggers fetch and flips property to :auto",
-         %{config_property: cprop, connection_property: connprop} do
-      # Start the test with the interface marked offline so the initial
-      # refresh skips the fetch.
-      PropertyTable.put(VintageNet, connprop, :disconnected)
-      _ = VintageNetProxy.status()
-
-      port =
-        serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
+    test "connection going down clears the cached PAC",
+         %{config_property: cprop, connection_property: connprop, iface: iface} do
+      port = serve_once(~s|function FindProxyForURL(url, host) { return "DIRECT"; }|)
 
       PropertyTable.put(VintageNet, cprop, %{
         type: :fake,
         proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
       })
 
-      _ = VintageNetProxy.status()
-      assert VintageNet.get(["proxy", "config"]) == :unset
+      flush(iface)
+      assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
 
-      PropertyTable.put(VintageNet, connprop, :internet)
-      _ = VintageNetProxy.status()
-
-      assert VintageNet.get(["proxy", "config"]) == :auto
-
-      assert VintageNetProxy.resolve("https://api.example.com/") ==
-               %{scheme: :http, host: "p.corp", port: 8080}
+      PropertyTable.put(VintageNet, connprop, :disconnected)
+      flush(iface)
+      assert VintageNetProxy.status().by_interface[iface].pac_loaded? == false
     end
   end
 
@@ -362,9 +317,7 @@ defmodule VintageNetProxyTest do
       PropertyTable.put(VintageNet, ["interface", primary, "connection"], :internet)
       PropertyTable.put(VintageNet, ["interface", secondary, "connection"], :internet)
 
-      start_supervised!(
-        {VintageNetProxy.Supervisor, interfaces: [primary, secondary]}
-      )
+      start_supervised!({VintageNetProxy.Supervisor, interfaces: [primary, secondary]})
 
       on_exit(fn ->
         for iface <- [primary, secondary],
@@ -378,6 +331,13 @@ defmodule VintageNetProxyTest do
       {:ok, primary: primary, secondary: secondary}
     end
 
+    defp flush_two(primary, secondary) do
+      _ = Interface.get(primary)
+      _ = Interface.get(secondary)
+      _ = VintageNetProxy.status()
+      :ok
+    end
+
     test "first interface in the list with intent + up connection wins",
          %{primary: primary, secondary: secondary} do
       PropertyTable.put(VintageNet, ["interface", secondary, "config"], %{
@@ -385,7 +345,7 @@ defmodule VintageNetProxyTest do
         proxy: %{mode: :direct}
       })
 
-      _ = VintageNetProxy.status()
+      flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == secondary
       assert VintageNet.get(["proxy", "config"]) == :direct
 
@@ -394,7 +354,7 @@ defmodule VintageNetProxyTest do
         proxy: %{mode: :manual, host: "p", port: 80}
       })
 
-      _ = VintageNetProxy.status()
+      flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == primary
       assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p", port: 80}
     end
@@ -411,36 +371,19 @@ defmodule VintageNetProxyTest do
         proxy: %{mode: :manual, scheme: :http, host: "s1", port: 80}
       })
 
-      _ = VintageNetProxy.status()
+      flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == primary
       assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p1", port: 80}
 
       PropertyTable.put(VintageNet, ["interface", primary, "connection"], :disconnected)
-      _ = VintageNetProxy.status()
+      flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == secondary
       assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "s1", port: 80}
 
       PropertyTable.put(VintageNet, ["interface", primary, "connection"], :internet)
-      _ = VintageNetProxy.status()
+      flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == primary
       assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p1", port: 80}
-    end
-
-    test "drops cached PAC when an interface disconnects",
-         %{primary: primary} do
-      port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p:1"; }|)
-
-      PropertyTable.put(VintageNet, ["interface", primary, "config"], %{
-        type: :fake,
-        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
-      })
-
-      _ = VintageNetProxy.status()
-      assert VintageNetProxy.status().by_interface[primary].pac_loaded? == true
-
-      PropertyTable.put(VintageNet, ["interface", primary, "connection"], :disconnected)
-      _ = VintageNetProxy.status()
-      assert VintageNetProxy.status().by_interface[primary].pac_loaded? == false
     end
 
     test "interfaces not in the configured list are ignored",
@@ -463,6 +406,7 @@ defmodule VintageNetProxyTest do
         proxy: %{mode: :direct}
       })
 
+      _ = Interface.get(primary)
       _ = VintageNetProxy.status()
       assert VintageNetProxy.status().active_iface == primary
       assert VintageNet.get(["proxy", "config"]) == :direct

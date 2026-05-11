@@ -2,7 +2,7 @@ defmodule VintageNetProxy.Selector do
   @moduledoc false
   use GenServer
 
-  alias VintageNetProxy.{Interface, Publisher, Roster}
+  alias VintageNetProxy.{Publisher, Roster}
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -14,8 +14,7 @@ defmodule VintageNetProxy.Selector do
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, []) || []
-    Interface.subscribe(interfaces)
-    roster = Roster.load(interfaces)
+    roster = Roster.new(interfaces, %{})
     Publisher.put(Roster.value(roster))
     {:ok, roster}
   end
@@ -28,20 +27,11 @@ defmodule VintageNetProxy.Selector do
     do: {:reply, Roster.resolve(roster, url), roster}
 
   @impl true
-  def handle_info({VintageNet, ["interface", iface, "config"], _o, new, _m}, roster),
-    do: {:noreply, update(roster, iface, &Interface.on_config(&1, new))}
-
-  def handle_info({VintageNet, ["interface", iface, "dhcp_options"], _o, new, _m}, roster),
-    do: {:noreply, update(roster, iface, &Interface.on_dhcp_options(&1, new))}
-
-  def handle_info({VintageNet, ["interface", iface, "connection"], _o, new, _m}, roster),
-    do: {:noreply, update(roster, iface, &Interface.on_connection(&1, new))}
+  def handle_info({:interface_changed, iface, state}, roster) do
+    new_roster = Roster.put_iface(roster, iface, state)
+    Publisher.put(Roster.value(new_roster))
+    {:noreply, new_roster}
+  end
 
   def handle_info(_msg, roster), do: {:noreply, roster}
-
-  defp update(roster, iface, fun) do
-    roster = Roster.update_iface(roster, iface, fun)
-    Publisher.put(Roster.value(roster))
-    roster
-  end
 end
