@@ -16,6 +16,9 @@ defmodule VintageNetProxy.Selector do
   def status, do: GenServer.call(__MODULE__, :status)
   def resolve(url), do: GenServer.call(__MODULE__, {:resolve, url})
 
+  @doc "Notify the Selector that an Interface's state has changed."
+  def notify_changed, do: GenServer.cast(__MODULE__, :changed)
+
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, []) || []

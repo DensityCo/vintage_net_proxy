@@ -4,7 +4,7 @@ defmodule VintageNetProxy.Interface do
 
   require Logger
 
-  alias VintageNetProxy.{Config, Fetcher, PAC}
+  alias VintageNetProxy.{Config, Fetcher, PAC, Selector}
 
   @up_states [:internet, :lan]
 
@@ -86,7 +86,7 @@ defmodule VintageNetProxy.Interface do
 
   defp settle(state) do
     new_state = refresh_pac_if_needed(state)
-    GenServer.cast(VintageNetProxy.Selector, :changed)
+    Selector.notify_changed()
     new_state
   end
 
