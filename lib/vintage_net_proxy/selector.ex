@@ -68,11 +68,51 @@ defmodule VintageNetProxy.Selector do
 
     new_state = %{state | snapshots: snapshots}
     publish(new_state)
-    {:reply, build_status(new_state), new_state}
+
+    active = pick_active(new_state)
+
+    by_interface =
+      Map.new(new_state.snapshots, fn {iface, snap} ->
+        {iface,
+         %{
+           intent: snap.intent,
+           connection: snap.connection,
+           dhcp_wpad_url: snap.dhcp_wpad_url,
+           pac_url: snap.pac_url,
+           pac_loaded?: not is_nil(snap.pac_script)
+         }}
+      end)
+
+    active_info =
+      case active do
+        nil ->
+          %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}
+
+        iface ->
+          Map.fetch!(by_interface, iface)
+      end
+
+    reply =
+      Map.merge(active_info, %{
+        interfaces: new_state.interfaces,
+        active_iface: active,
+        target_url: new_state.target_url,
+        by_interface: by_interface,
+        current: value(new_state)
+      })
+
+    {:reply, reply, new_state}
   end
 
-  def handle_call({:resolve, url}, _from, state),
-    do: {:reply, do_resolve(state, url), state}
+  def handle_call({:resolve, url}, _from, state) do
+    reply =
+      case pick_active(state) do
+        nil -> :direct
+        iface -> Interface.resolve(iface, url)
+      end
+
+    {:reply, reply, state}
+  end
 
   def handle_call({:set_target_url, url}, _from, state) do
     new_state = %{state | target_url: url}
@@ -109,24 +149,25 @@ defmodule VintageNetProxy.Selector do
 
   defp value(state) do
     case pick_active(state) do
-      nil -> :unset
-      iface -> snapshot_value(Map.fetch!(state.snapshots, iface), state.target_url)
-    end
-  end
+      nil ->
+        :unset
 
-  defp snapshot_value(%{intent: %{mode: :direct}}, _), do: :direct
-  defp snapshot_value(%{intent: %{mode: :manual} = m}, _), do: Config.to_descriptor(m)
+      iface ->
+        snap = Map.fetch!(state.snapshots, iface)
 
-  defp snapshot_value(%{intent: %{mode: :auto}, pac_script: script}, target)
-       when is_binary(script),
-       do: PAC.find_proxy(script, target || @fallback_target_url)
+        case snap.intent do
+          %{mode: :direct} ->
+            :direct
 
-  defp snapshot_value(_, _), do: :unset
+          %{mode: :manual} = m ->
+            Config.to_descriptor(m)
 
-  defp do_resolve(state, url) do
-    case pick_active(state) do
-      nil -> :direct
-      iface -> Interface.resolve(iface, url)
+          %{mode: :auto} when is_binary(snap.pac_script) ->
+            PAC.find_proxy(snap.pac_script, state.target_url || @fallback_target_url)
+
+          _ ->
+            :unset
+        end
     end
   end
 
@@ -144,36 +185,4 @@ defmodule VintageNetProxy.Selector do
     }
   end
 
-  defp build_status(state) do
-    active = pick_active(state)
-
-    by_interface =
-      Map.new(state.snapshots, fn {iface, snap} ->
-        {iface,
-         %{
-           intent: snap.intent,
-           connection: snap.connection,
-           dhcp_wpad_url: snap.dhcp_wpad_url,
-           pac_url: snap.pac_url,
-           pac_loaded?: not is_nil(snap.pac_script)
-         }}
-      end)
-
-    active_info =
-      case active do
-        nil ->
-          %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}
-
-        iface ->
-          Map.fetch!(by_interface, iface)
-      end
-
-    Map.merge(active_info, %{
-      interfaces: state.interfaces,
-      active_iface: active,
-      target_url: state.target_url,
-      by_interface: by_interface,
-      current: value(state)
-    })
-  end
 end
