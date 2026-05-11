@@ -147,6 +147,39 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
     end
   end
 
+  describe "actual HTTP round-trip through the resolved proxy" do
+    # Sends a real HTTP request through tinyproxy at the descriptor that
+    # `VintageNetProxy.resolve/1` returns, and asserts it gets forwarded
+    # and the response comes back. tinyproxy uses the docker-compose
+    # service DNS (`wpad`) to resolve the target host inside its container
+    # network, so the test doesn't depend on host DNS or external internet.
+    test "GET through the proxy returns the upstream body", %{iface: iface} do
+      configure_auto(iface)
+
+      %{host: host, port: port} = VintageNetProxy.resolve("https://www.google.com/")
+
+      {:ok, sock} =
+        :gen_tcp.connect(
+          String.to_charlist(host),
+          port,
+          [:binary, active: false, packet: :raw],
+          2_000
+        )
+
+      # HTTP proxy form: absolute URL on the request line. tinyproxy will
+      # parse the host out of the URL and forward there.
+      request = "GET http://wpad/wpad.dat HTTP/1.1\r\nHost: wpad\r\nConnection: close\r\n\r\n"
+      :ok = :gen_tcp.send(sock, request)
+
+      response = recv_all(sock)
+      :gen_tcp.close(sock)
+
+      assert response =~ "200 OK"
+      # The body should be the actual PAC script content we serve from nginx.
+      assert response =~ "FindProxyForURL"
+    end
+  end
+
   # --- helpers ---
 
   defp configure_auto(iface) do
@@ -171,6 +204,14 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
     case :httpc.request(:get, request, http_opts, body_format: :binary) do
       {:ok, {{_, 200, _}, _, _}} -> true
       _ -> false
+    end
+  end
+
+  defp recv_all(sock, acc \\ <<>>) do
+    case :gen_tcp.recv(sock, 0, 2_000) do
+      {:ok, data} -> recv_all(sock, acc <> data)
+      {:error, :closed} -> acc
+      {:error, _} -> acc
     end
   end
 end
