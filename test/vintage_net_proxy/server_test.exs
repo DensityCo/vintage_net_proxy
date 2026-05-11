@@ -9,16 +9,23 @@ defmodule VintageNetProxy.ServerTest do
     iface = "test#{:erlang.unique_integer([:positive])}"
     config_property = ["interface", iface, "config"]
     dhcp_property = ["interface", iface, "dhcp_options"]
+    lower_up_property = ["interface", iface, "lower_up"]
 
     pid = start_supervised!({Server, [interface: iface]})
 
     on_exit(fn ->
       PropertyTable.delete(VintageNet, config_property)
       PropertyTable.delete(VintageNet, dhcp_property)
+      PropertyTable.delete(VintageNet, lower_up_property)
       PropertyTable.delete(VintageNet, ["proxy", "config"])
     end)
 
-    {:ok, iface: iface, pid: pid, config_property: config_property, dhcp_property: dhcp_property}
+    {:ok,
+     iface: iface,
+     pid: pid,
+     config_property: config_property,
+     dhcp_property: dhcp_property,
+     lower_up_property: lower_up_property}
   end
 
   describe "initial state" do
@@ -334,6 +341,37 @@ defmodule VintageNetProxy.ServerTest do
                %{scheme: :http, host: "primary-proxy", port: 8080}
 
       assert Server.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
+    end
+
+    test "lower_up coming true re-publishes the resolved descriptor",
+         %{config_property: cprop, lower_up_property: lprop} do
+      port =
+        serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
+
+      Server.set_target_url("https://api.example.com/")
+
+      PropertyTable.put(VintageNet, cprop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               %{scheme: :http, host: "p.corp", port: 8080}
+
+      # Simulate the proxy property being out-of-date (e.g. cleared before
+      # the link was up). When lower_up flips true, the handler must
+      # re-publish so subscribers learn the current value.
+      PropertyTable.delete(VintageNet, ["proxy", "config"])
+      _ = Server.status()
+      assert VintageNet.get(["proxy", "config"]) == nil
+
+      PropertyTable.put(VintageNet, lprop, true)
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               %{scheme: :http, host: "p.corp", port: 8080}
     end
 
     test "resolve/1 evaluates the PAC against the supplied URL, not the target",
