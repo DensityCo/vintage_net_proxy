@@ -69,7 +69,8 @@ defmodule VintageNetProxy.RosterTest do
       s =
         state([
           iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet),
-          iface(iface: "wlan0",
+          iface(
+            iface: "wlan0",
             intent: %{mode: :manual, scheme: :http, host: "x", port: 1},
             connection: :internet
           )
@@ -92,7 +93,8 @@ defmodule VintageNetProxy.RosterTest do
       s =
         state([
           iface(iface: "wlan0", intent: %{mode: :direct}, connection: :internet),
-          iface(iface: "eth0",
+          iface(
+            iface: "eth0",
             intent: %{mode: :manual, scheme: :http, host: "x", port: 1},
             connection: :internet
           )

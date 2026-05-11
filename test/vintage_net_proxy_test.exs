@@ -127,6 +127,7 @@ defmodule VintageNetProxyTest do
     test "records DHCP wpad URL in status", %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
       flush(iface)
+
       assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url ==
                "http://wpad.test/wpad.dat"
     end
