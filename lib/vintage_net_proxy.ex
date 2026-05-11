@@ -28,8 +28,12 @@ defmodule VintageNetProxy do
 
   ## Configuration
 
-  Add a `:proxy` field to your interface configuration. The schema is
-  documented in `VintageNetProxy.Config`.
+  Tell the library which interfaces to track, in priority order:
+
+      config :vintage_net_proxy, interfaces: ["eth0", "wlan0"]
+
+  Then add a `:proxy` field to each interface configuration. The schema
+  is documented in `VintageNetProxy.Config`.
 
       VintageNet.configure("wlan0", %{
         type: VintageNetWiFi,
@@ -53,6 +57,11 @@ defmodule VintageNetProxy do
         proxy: %{mode: :direct}
       })
 
+  At runtime, the library picks the first interface in the list that is
+  both connected (`:internet` or `:lan`) and carries a `:proxy` intent.
+  When that interface goes down, the next eligible one takes over; when
+  it returns, it reclaims.
+
   Persistence and reboot-restore come for free — vintage_net already
   persists interface configurations.
 
@@ -73,7 +82,7 @@ defmodule VintageNetProxy do
       #=> :direct
   """
 
-  alias VintageNetProxy.{Config, Server}
+  alias VintageNetProxy.{Config, Selector}
 
   @property ["proxy", "config"]
 
@@ -112,17 +121,24 @@ defmodule VintageNetProxy do
 
   @doc """
   Introspection snapshot — current internal state.
+
+  The flat `:intent`, `:pac_url`, `:dhcp_wpad_url`, `:pac_loaded?` fields
+  mirror the *currently active* interface (or are `nil`/`false` when no
+  interface is active). `:by_interface` gives the same information per
+  configured interface.
   """
   @spec status() :: %{
-          iface: String.t(),
+          interfaces: [String.t()],
+          active_iface: String.t() | nil,
           target_url: String.t() | nil,
           intent: Config.t() | nil,
           pac_url: String.t() | nil,
           dhcp_wpad_url: String.t() | nil,
           pac_loaded?: boolean(),
+          by_interface: %{optional(String.t()) => map()},
           current: proxy()
         }
-  def status, do: Server.status()
+  def status, do: Selector.status()
 
   @doc """
   Set the URL used as the evaluation context for PAC scripts.
@@ -130,11 +146,11 @@ defmodule VintageNetProxy do
   Typically the upstream the device cares about (the cloud API endpoint).
   """
   @spec set_target_url(String.t()) :: :ok
-  def set_target_url(url) when is_binary(url), do: Server.set_target_url(url)
+  def set_target_url(url) when is_binary(url), do: Selector.set_target_url(url)
 
   @doc "Read the current PAC evaluation target URL (or `nil` if unset)."
   @spec get_target_url() :: String.t() | nil
-  def get_target_url, do: Server.get_target_url()
+  def get_target_url, do: Selector.get_target_url()
 
   @doc """
   Resolve the proxy for a specific URL.
@@ -143,5 +159,5 @@ defmodule VintageNetProxy do
   Manual configurations apply regardless of the URL.
   """
   @spec resolve(String.t()) :: resolved()
-  def resolve(url) when is_binary(url), do: Server.resolve(url)
+  def resolve(url) when is_binary(url), do: Selector.resolve(url)
 end
