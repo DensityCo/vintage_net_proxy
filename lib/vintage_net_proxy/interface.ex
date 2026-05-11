@@ -1,10 +1,9 @@
 defmodule VintageNetProxy.Interface do
   @moduledoc false
-  use GenServer
 
   require Logger
 
-  alias VintageNetProxy.{Config, Fetcher, PAC, Selector}
+  alias VintageNetProxy.{Config, Fetcher, PAC}
 
   @up_states [:internet, :lan]
 
@@ -14,138 +13,106 @@ defmodule VintageNetProxy.Interface do
             pac_script: nil,
             connection: nil
 
-  def start_link(opts) do
-    iface = Keyword.fetch!(opts, :iface)
-    GenServer.start_link(__MODULE__, iface, name: via(iface))
+  @doc "Build initial state by reading current PropertyTable values."
+  def load(iface) do
+    %__MODULE__{iface: iface}
+    |> put_connection(VintageNet.get(["interface", iface, "connection"]))
+    |> put_intent(VintageNet.get(["interface", iface, "config"]))
+    |> put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
+    |> refresh_pac()
   end
 
-  @doc "Current snapshot of this interface's resolution state. Sync."
-  def snapshot(iface), do: GenServer.call(via(iface), :snapshot)
+  @doc "Handle a `[\"interface\", iface, \"config\"]` change."
+  def on_config(state, raw), do: state |> put_intent(raw) |> refresh_pac()
+
+  @doc "Handle a `[\"interface\", iface, \"dhcp_options\"]` change."
+  def on_dhcp_options(state, opts), do: state |> put_dhcp_options(opts) |> refresh_pac()
+
+  @doc "Handle a `[\"interface\", iface, \"connection\"]` change."
+  def on_connection(state, conn), do: state |> put_connection(conn) |> refresh_pac()
+
+  @doc "True iff this interface has an intent and is connected enough to serve it."
+  def eligible?(state),
+    do: state.intent != nil and state.connection in @up_states
+
+  @doc "The proxy value this interface would publish if it were active."
+  def value(state) do
+    case state.intent do
+      %{mode: :direct} -> :direct
+      %{mode: :manual} = m -> Config.to_descriptor(m)
+      %{mode: :auto} -> if not is_nil(state.pac_script), do: :auto, else: :unset
+      _ -> :unset
+    end
+  end
 
   @doc "Evaluate the loaded PAC against `url` (or apply manual/direct intent)."
-  def resolve(iface, url), do: GenServer.call(via(iface), {:resolve, url})
-
-  @impl true
-  def init(iface) do
-    Enum.each(["config", "dhcp_options", "connection"], fn prop ->
-      VintageNet.subscribe(["interface", iface, prop])
-    end)
-
-    state =
-      %__MODULE__{
-        iface: iface,
-        connection: VintageNet.get(["interface", iface, "connection"])
-      }
-      |> load_intent()
-      |> load_wpad()
-      |> refresh_pac_if_needed()
-
-    # No notify on init: the Selector pulls fresh state via snapshot/1
-    # after it starts each Interface as a child.
-    {:ok, state}
+  def resolve(state, url) do
+    case state.intent do
+      %{mode: :direct} -> :direct
+      %{mode: :manual} = m -> Config.to_descriptor(m)
+      %{mode: :auto} when is_binary(state.pac_script) -> PAC.find_proxy(state.pac_script, url)
+      _ -> :direct
+    end
   end
 
-  @impl true
-  def handle_call(:snapshot, _from, state),
-    do: {:reply, snapshot_of(state), state}
-
-  def handle_call({:resolve, url}, _from, state) do
-    reply =
-      case state.intent do
-        %{mode: :direct} -> :direct
-        %{mode: :manual} = m -> Config.to_descriptor(m)
-        %{mode: :auto} when is_binary(state.pac_script) -> PAC.find_proxy(state.pac_script, url)
-        _ -> :direct
-      end
-
-    {:reply, reply, state}
+  @doc "Introspection snapshot."
+  def snapshot(state) do
+    %{
+      iface: state.iface,
+      eligible?: eligible?(state),
+      value: value(state),
+      intent: state.intent,
+      connection: state.connection,
+      pac_loaded?: not is_nil(state.pac_script),
+      dhcp_wpad_url: state.dhcp_wpad_url,
+      pac_url: effective_pac_url(state)
+    }
   end
 
-  @impl true
-  def handle_info(
-        {VintageNet, ["interface", iface, "config"], _o, _n, _m},
-        %{iface: iface} = state
-      ),
-      do: {:noreply, state |> load_intent() |> settle()}
+  # --- pure setters ---
 
-  def handle_info(
-        {VintageNet, ["interface", iface, "dhcp_options"], _o, _n, _m},
-        %{iface: iface} = state
-      ),
-      do: {:noreply, state |> load_wpad() |> settle()}
+  defp put_connection(state, conn), do: %{state | connection: conn}
 
-  def handle_info(
-        {VintageNet, ["interface", iface, "connection"], _o, conn, _m},
-        %{iface: iface} = state
-      ),
-      do: {:noreply, %{state | connection: conn} |> settle()}
+  defp put_intent(state, %{proxy: raw}) when is_map(raw) do
+    case Config.normalize(raw) do
+      {:ok, intent} ->
+        %{state | intent: intent}
 
-  def handle_info(_msg, state), do: {:noreply, state}
-
-  defp via(iface), do: {:via, Registry, {VintageNetProxy.Registry, iface}}
-
-  defp settle(state) do
-    new_state = refresh_pac_if_needed(state)
-    Selector.notify_changed()
-    new_state
+      {:error, reason} ->
+        Logger.warning("VintageNetProxy: invalid :proxy config on #{state.iface}: #{reason}")
+        %{state | intent: nil}
+    end
   end
 
-  defp load_intent(state) do
-    intent =
-      case VintageNet.get(["interface", state.iface, "config"]) do
-        %{proxy: raw} when is_map(raw) ->
-          case Config.normalize(raw) do
-            {:ok, i} ->
-              i
+  defp put_intent(state, _), do: %{state | intent: nil}
 
-            {:error, reason} ->
-              Logger.warning(
-                "VintageNetProxy: invalid :proxy config on #{state.iface}: #{reason}"
-              )
+  defp put_dhcp_options(state, %{wpad: url}) when is_binary(url) and url != "",
+    do: %{state | dhcp_wpad_url: url}
 
-              nil
-          end
+  defp put_dhcp_options(state, _), do: %{state | dhcp_wpad_url: nil}
 
-        _ ->
-          nil
-      end
+  # --- side-effecting: PAC fetch ---
 
-    %{state | intent: intent}
-  end
+  defp refresh_pac(%{connection: c} = state) when c not in @up_states,
+    do: %{state | pac_script: nil}
 
-  defp load_wpad(state) do
-    url =
-      case VintageNet.get(["interface", state.iface, "dhcp_options"]) do
-        %{wpad: url} when is_binary(url) and url != "" -> url
-        _ -> nil
-      end
-
-    %{state | dhcp_wpad_url: url}
-  end
-
-  defp refresh_pac_if_needed(state) do
-    cond do
-      state.connection not in @up_states ->
+  defp refresh_pac(state) do
+    case effective_pac_url(state) do
+      nil ->
         %{state | pac_script: nil}
 
-      true ->
-        case effective_pac_url(state) do
-          nil ->
-            %{state | pac_script: nil}
+      url ->
+        case Fetcher.get(url) do
+          {:ok, script} ->
+            %{state | pac_script: script}
 
-          url ->
-            case Fetcher.get(url) do
-              {:ok, script} ->
-                %{state | pac_script: script}
+          {:error, reason} ->
+            Logger.warning(
+              "VintageNetProxy: PAC fetch failed on #{state.iface} " <>
+                "(#{inspect(url)}): #{inspect(reason)}"
+            )
 
-              {:error, reason} ->
-                Logger.warning(
-                  "VintageNetProxy: PAC fetch failed on #{state.iface} " <>
-                    "(#{inspect(url)}): #{inspect(reason)}"
-                )
-
-                state
-            end
+            state
         end
     end
   end
@@ -158,27 +125,4 @@ defmodule VintageNetProxy.Interface do
     do: url
 
   defp effective_pac_url(_), do: nil
-
-  defp snapshot_of(state) do
-    %{
-      iface: state.iface,
-      eligible?: state.intent != nil and state.connection in @up_states,
-      value: value_of(state),
-      # Introspection — surfaced via VintageNetProxy.status/0.
-      intent: state.intent,
-      connection: state.connection,
-      pac_loaded?: not is_nil(state.pac_script),
-      dhcp_wpad_url: state.dhcp_wpad_url,
-      pac_url: effective_pac_url(state)
-    }
-  end
-
-  defp value_of(state) do
-    case state.intent do
-      %{mode: :direct} -> :direct
-      %{mode: :manual} = m -> Config.to_descriptor(m)
-      %{mode: :auto} -> if not is_nil(state.pac_script), do: :auto, else: :unset
-      _ -> :unset
-    end
-  end
 end

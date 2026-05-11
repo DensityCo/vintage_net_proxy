@@ -2,14 +2,10 @@ defmodule VintageNetProxy.Supervisor do
   @moduledoc """
   Top-level supervision tree for the proxy library.
 
-  Children, in :rest_for_one order:
-
-    1. `VintageNetProxy.Registry` — maps interface names to Interface pids.
-    2. `VintageNetProxy.InterfaceSupervisor` — `DynamicSupervisor` that
-       owns one `VintageNetProxy.Interface` per tracked interface.
-    3. `VintageNetProxy.Selector` — singleton that aggregates per-interface
-       snapshots, picks the active interface, and publishes the global
-       `["proxy", "config"]` property.
+  Owns a single child — `VintageNetProxy.Selector` — which holds
+  per-interface state, subscribes to the relevant VintageNet
+  PropertyTable keys, picks the active interface, and publishes the
+  global `["proxy", "config"]` property.
 
   Start it with the list of interfaces to track:
 
@@ -28,13 +24,6 @@ defmodule VintageNetProxy.Supervisor do
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, [])
-
-    children = [
-      {Registry, keys: :unique, name: VintageNetProxy.Registry},
-      {DynamicSupervisor, name: VintageNetProxy.InterfaceSupervisor, strategy: :one_for_one},
-      {VintageNetProxy.Selector, interfaces: interfaces}
-    ]
-
-    Supervisor.init(children, strategy: :rest_for_one)
+    Supervisor.init([{VintageNetProxy.Selector, interfaces: interfaces}], strategy: :one_for_one)
   end
 end
