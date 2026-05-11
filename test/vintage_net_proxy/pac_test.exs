@@ -150,6 +150,66 @@ defmodule VintageNetProxy.PACTest do
     end
   end
 
+  describe "find_proxy/2 — representative enterprise WPAD" do
+    # Realistic corporate WPAD pattern: bypass internal traffic with a
+    # chain of rules, send the rest through a tiered proxy with DIRECT
+    # fallback. Mirrors what production WPAD files look like once their
+    # `||`-combined predicates are expanded into separate `if` statements
+    # (the form this evaluator requires).
+    @wpad """
+    function FindProxyForURL(url, host) {
+      if (isPlainHostName(host)) return "DIRECT";
+      if (host == "localhost") return "DIRECT";
+      if (dnsDomainIs(host, ".corp.example.com")) return "DIRECT";
+      if (dnsDomainIs(host, ".internal.example.com")) return "DIRECT";
+      if (shExpMatch(host, "*.s3.amazonaws.com")) return "DIRECT";
+      if (dnsDomainIs(host, ".trusted-partner.com")) return "PROXY trusted-proxy:3128";
+      return "PROXY primary-proxy:8080; PROXY backup-proxy:8080; DIRECT";
+    }
+    """
+
+    test "plain hostnames bypass the proxy" do
+      assert PAC.find_proxy(@wpad, "http://intranet/") == :direct
+      assert PAC.find_proxy(@wpad, "http://buildserver/jobs") == :direct
+    end
+
+    test "loopback bypasses the proxy" do
+      assert PAC.find_proxy(@wpad, "http://localhost:8080/") == :direct
+    end
+
+    test "internal corp domains bypass via dnsDomainIs" do
+      assert PAC.find_proxy(@wpad, "https://wiki.corp.example.com/") == :direct
+      assert PAC.find_proxy(@wpad, "https://api.internal.example.com/v1/") == :direct
+    end
+
+    test "S3 buckets bypass via shExpMatch glob" do
+      assert PAC.find_proxy(@wpad, "https://my-bucket.s3.amazonaws.com/") == :direct
+    end
+
+    test "trusted-partner traffic uses a dedicated proxy" do
+      assert PAC.find_proxy(@wpad, "https://api.trusted-partner.com/") ==
+               %{scheme: :http, host: "trusted-proxy", port: 3128}
+    end
+
+    test "general internet traffic uses the primary proxy (first in fallback list)" do
+      assert PAC.find_proxy(@wpad, "https://www.google.com/") ==
+               %{scheme: :http, host: "primary-proxy", port: 8080}
+
+      assert PAC.find_proxy(@wpad, "https://github.com/") ==
+               %{scheme: :http, host: "primary-proxy", port: 8080}
+    end
+
+    test "rule precedence: first matching if wins" do
+      # api.corp.example.com matches both isPlainHostName (no — it has dots)
+      # and dnsDomainIs(".corp.example.com"). Confirms the second rule fires.
+      assert PAC.find_proxy(@wpad, "https://api.corp.example.com/") == :direct
+
+      # s3 host also matches dnsDomainIs(".amazonaws.com") if such a rule
+      # existed earlier — here only the shExpMatch path can fire.
+      assert PAC.find_proxy(@wpad, "https://logs.s3.amazonaws.com/") == :direct
+    end
+  end
+
   describe "find_proxy/2 — robustness" do
     test "empty script → direct" do
       assert PAC.find_proxy("", "http://x/") == :direct

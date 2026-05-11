@@ -200,4 +200,190 @@ defmodule VintageNetProxy.ServerTest do
       assert status.current == :direct
     end
   end
+
+  describe "intent: :auto end-to-end (fetch + evaluate)" do
+    test "explicit :pac_url is fetched and the descriptor is published",
+         %{config_property: prop} do
+      port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
+
+      Server.set_target_url("https://api.example.com/")
+
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               %{scheme: :http, host: "p.corp", port: 8080}
+
+      assert Server.status().pac_loaded? == true
+    end
+
+    test "DHCP-discovered WPAD URL is fetched when intent has no explicit pac_url",
+         %{config_property: cprop, dhcp_property: dprop} do
+      pac = """
+      function FindProxyForURL(url, host) {
+        if (shExpMatch(host, "*.corp")) return "PROXY corp:8080";
+        return "DIRECT";
+      }
+      """
+
+      port = serve_once(pac)
+
+      Server.set_target_url("https://api.corp/")
+
+      PropertyTable.put(VintageNet, dprop, %{wpad: "http://127.0.0.1:#{port}/wpad.dat"})
+      _ = Server.status()
+      PropertyTable.put(VintageNet, cprop, %{type: :fake, proxy: %{mode: :auto}})
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               %{scheme: :http, host: "corp", port: 8080}
+    end
+
+    test "explicit :pac_url takes precedence over DHCP wpad",
+         %{config_property: cprop, dhcp_property: dprop} do
+      explicit_port =
+        serve_once(~s|function FindProxyForURL(url, host) { return "PROXY explicit:1"; }|)
+
+      # A second listener that should never be hit; if the server queried it,
+      # accept would time out and the test would still pass — but the assertion
+      # on the published descriptor would fail because it would come back with
+      # the wrong host.
+      {:ok, decoy_lsock} =
+        :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+
+      on_exit(fn -> :gen_tcp.close(decoy_lsock) end)
+      {:ok, decoy_port} = :inet.port(decoy_lsock)
+
+      Server.set_target_url("https://x/")
+
+      PropertyTable.put(VintageNet, dprop, %{wpad: "http://127.0.0.1:#{decoy_port}/wpad.dat"})
+      _ = Server.status()
+
+      PropertyTable.put(VintageNet, cprop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{explicit_port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               %{scheme: :http, host: "explicit", port: 1}
+    end
+
+    test "set_target_url re-publishes against the loaded PAC without re-fetching",
+         %{config_property: prop} do
+      pac = """
+      function FindProxyForURL(url, host) {
+        if (shExpMatch(host, "*.corp.example")) return "PROXY corp:8080";
+        return "DIRECT";
+      }
+      """
+
+      port = serve_once(pac)
+
+      Server.set_target_url("https://api.corp.example/")
+
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               %{scheme: :http, host: "corp", port: 8080}
+
+      Server.set_target_url("https://google.com/")
+      assert VintageNet.get(["proxy", "config"]) == :direct
+    end
+
+    test "end-to-end with a representative enterprise WPAD",
+         %{config_property: prop} do
+      wpad = """
+      function FindProxyForURL(url, host) {
+        if (isPlainHostName(host)) return "DIRECT";
+        if (host == "localhost") return "DIRECT";
+        if (dnsDomainIs(host, ".corp.example.com")) return "DIRECT";
+        if (shExpMatch(host, "*.s3.amazonaws.com")) return "DIRECT";
+        return "PROXY primary-proxy:8080; DIRECT";
+      }
+      """
+
+      port = serve_once(wpad)
+
+      Server.set_target_url("https://api.corp.example.com/")
+
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+
+      # api.corp.example.com matches the dnsDomainIs bypass → :direct
+      assert VintageNet.get(["proxy", "config"]) == :direct
+
+      # Per-URL resolution against the cached script (no re-fetch needed)
+      assert Server.resolve("http://intranet/") == :direct
+
+      assert Server.resolve("https://www.google.com/") ==
+               %{scheme: :http, host: "primary-proxy", port: 8080}
+
+      assert Server.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
+    end
+
+    test "resolve/1 evaluates the PAC against the supplied URL, not the target",
+         %{config_property: prop} do
+      pac = """
+      function FindProxyForURL(url, host) {
+        if (shExpMatch(host, "*.corp.example")) return "PROXY corp:8080";
+        return "DIRECT";
+      }
+      """
+
+      port = serve_once(pac)
+
+      Server.set_target_url("https://api.corp.example/")
+
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+
+      assert Server.resolve("http://google.com/") == :direct
+
+      assert Server.resolve("https://x.corp.example/") ==
+               %{scheme: :http, host: "corp", port: 8080}
+    end
+  end
+
+  defp serve_once(body) do
+    {:ok, lsock} =
+      :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+
+    on_exit(fn -> :gen_tcp.close(lsock) end)
+    {:ok, port} = :inet.port(lsock)
+
+    spawn_link(fn ->
+      {:ok, sock} = :gen_tcp.accept(lsock, 5_000)
+      {:ok, _request} = :gen_tcp.recv(sock, 0, 5_000)
+
+      response =
+        "HTTP/1.1 200 OK\r\n" <>
+          "Content-Length: #{byte_size(body)}\r\n" <>
+          "Content-Type: text/plain\r\n\r\n" <>
+          body
+
+      :gen_tcp.send(sock, response)
+      :gen_tcp.close(sock)
+    end)
+
+    port
+  end
 end
