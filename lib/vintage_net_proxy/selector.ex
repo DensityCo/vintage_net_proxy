@@ -2,8 +2,7 @@ defmodule VintageNetProxy.Selector do
   @moduledoc false
   use GenServer
 
-  alias VintageNetProxy.Interface
-  alias VintageNetProxy.Selector.State
+  alias VintageNetProxy.{Interface, Roster}
 
   @property ["proxy", "config"]
 
@@ -19,36 +18,33 @@ defmodule VintageNetProxy.Selector do
     interfaces = Keyword.get(opts, :interfaces, []) || []
     Enum.each(interfaces, &Interface.subscribe/1)
     states = Map.new(interfaces, fn iface -> {iface, Interface.load(iface)} end)
-    state = State.new(interfaces, states)
-    publish(state)
-    {:ok, state}
+    roster = Roster.new(interfaces, states)
+    PropertyTable.put(VintageNet, @property, Roster.value(roster))
+    {:ok, roster}
   end
 
   @impl true
-  def handle_call(:status, _from, state),
-    do: {:reply, State.status(state, VintageNet.get(@property, :unset)), state}
+  def handle_call(:status, _from, roster),
+    do: {:reply, Roster.status(roster, VintageNet.get(@property, :unset)), roster}
 
-  def handle_call({:resolve, url}, _from, state),
-    do: {:reply, State.resolve(state, url), state}
+  def handle_call({:resolve, url}, _from, roster),
+    do: {:reply, Roster.resolve(roster, url), roster}
 
   @impl true
-  def handle_info({VintageNet, ["interface", iface, "config"], _o, new, _m}, state),
-    do: {:noreply, update(state, iface, &Interface.on_config(&1, new))}
+  def handle_info({VintageNet, ["interface", iface, "config"], _o, new, _m}, roster),
+    do: {:noreply, update(roster, iface, &Interface.on_config(&1, new))}
 
-  def handle_info({VintageNet, ["interface", iface, "dhcp_options"], _o, new, _m}, state),
-    do: {:noreply, update(state, iface, &Interface.on_dhcp_options(&1, new))}
+  def handle_info({VintageNet, ["interface", iface, "dhcp_options"], _o, new, _m}, roster),
+    do: {:noreply, update(roster, iface, &Interface.on_dhcp_options(&1, new))}
 
-  def handle_info({VintageNet, ["interface", iface, "connection"], _o, new, _m}, state),
-    do: {:noreply, update(state, iface, &Interface.on_connection(&1, new))}
+  def handle_info({VintageNet, ["interface", iface, "connection"], _o, new, _m}, roster),
+    do: {:noreply, update(roster, iface, &Interface.on_connection(&1, new))}
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_info(_msg, roster), do: {:noreply, roster}
 
-  defp update(state, iface, fun) do
-    new_state = State.update_iface(state, iface, fun)
-    publish(new_state)
-    new_state
+  defp update(roster, iface, fun) do
+    roster = Roster.update_iface(roster, iface, fun)
+    PropertyTable.put(VintageNet, @property, Roster.value(roster))
+    roster
   end
-
-  defp publish(state),
-    do: PropertyTable.put(VintageNet, @property, State.value(state))
 end

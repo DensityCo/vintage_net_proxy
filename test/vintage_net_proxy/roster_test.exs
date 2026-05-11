@@ -1,8 +1,7 @@
-defmodule VintageNetProxy.Selector.StateTest do
+defmodule VintageNetProxy.RosterTest do
   use ExUnit.Case, async: true
 
-  alias VintageNetProxy.Interface
-  alias VintageNetProxy.Selector.State
+  alias VintageNetProxy.{Interface, Roster}
 
   defp iface(opts) do
     %Interface{
@@ -16,33 +15,33 @@ defmodule VintageNetProxy.Selector.StateTest do
 
   defp state(iface_states) do
     interfaces = Enum.map(iface_states, & &1.iface)
-    State.new(interfaces, Map.new(iface_states, &{&1.iface, &1}))
+    Roster.new(interfaces, Map.new(iface_states, &{&1.iface, &1}))
   end
 
   describe "value/1" do
     test "no interfaces → :unset" do
-      assert State.value(State.new([], %{})) == :unset
+      assert Roster.value(Roster.new([], %{})) == :unset
     end
 
     test "intent: nil → :unset (not eligible)" do
       s = state([iface(iface: "eth0", intent: nil, connection: :internet)])
-      assert State.value(s) == :unset
+      assert Roster.value(s) == :unset
     end
 
     test "connection: :disconnected → :unset (not eligible)" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :disconnected)])
-      assert State.value(s) == :unset
+      assert Roster.value(s) == :unset
     end
 
     test "eligible :direct → :direct" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
-      assert State.value(s) == :direct
+      assert Roster.value(s) == :direct
     end
 
     test "eligible :manual → descriptor" do
       intent = %{mode: :manual, scheme: :http, host: "p.example", port: 8080}
       s = state([iface(iface: "eth0", intent: intent, connection: :lan)])
-      assert State.value(s) == %{scheme: :http, host: "p.example", port: 8080}
+      assert Roster.value(s) == %{scheme: :http, host: "p.example", port: 8080}
     end
 
     test "eligible :auto with pac_script → :auto" do
@@ -56,12 +55,12 @@ defmodule VintageNetProxy.Selector.StateTest do
           )
         ])
 
-      assert State.value(s) == :auto
+      assert Roster.value(s) == :auto
     end
 
     test "eligible :auto without pac_script → :unset" do
       s = state([iface(iface: "eth0", intent: %{mode: :auto}, connection: :internet)])
-      assert State.value(s) == :unset
+      assert Roster.value(s) == :unset
     end
   end
 
@@ -76,7 +75,7 @@ defmodule VintageNetProxy.Selector.StateTest do
           )
         ])
 
-      assert State.value(s) == :direct
+      assert Roster.value(s) == :direct
     end
 
     test "ineligible primary falls through to secondary" do
@@ -86,7 +85,7 @@ defmodule VintageNetProxy.Selector.StateTest do
           iface(iface: "wlan0", intent: %{mode: :direct}, connection: :internet)
         ])
 
-      assert State.value(s) == :direct
+      assert Roster.value(s) == :direct
     end
 
     test "priority follows the configured list, not map key order" do
@@ -99,24 +98,24 @@ defmodule VintageNetProxy.Selector.StateTest do
           )
         ])
 
-      assert State.value(s) == :direct
+      assert Roster.value(s) == :direct
     end
   end
 
   describe "resolve/2" do
     test "no active interface → :direct" do
-      assert State.resolve(State.new([], %{}), "https://example.com/") == :direct
+      assert Roster.resolve(Roster.new([], %{}), "https://example.com/") == :direct
     end
 
     test "active :direct → :direct" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
-      assert State.resolve(s, "https://example.com/") == :direct
+      assert Roster.resolve(s, "https://example.com/") == :direct
     end
 
     test "active :manual → descriptor" do
       intent = %{mode: :manual, scheme: :http, host: "p", port: 8080}
       s = state([iface(iface: "eth0", intent: intent, connection: :internet)])
-      assert State.resolve(s, "https://example.com/") == %{scheme: :http, host: "p", port: 8080}
+      assert Roster.resolve(s, "https://example.com/") == %{scheme: :http, host: "p", port: 8080}
     end
 
     test "active :auto evaluates PAC" do
@@ -132,7 +131,7 @@ defmodule VintageNetProxy.Selector.StateTest do
           )
         ])
 
-      assert State.resolve(s, "https://x.example/") ==
+      assert Roster.resolve(s, "https://x.example/") ==
                %{scheme: :http, host: "p.corp", port: 8080}
     end
   end
@@ -140,7 +139,7 @@ defmodule VintageNetProxy.Selector.StateTest do
   describe "status/2" do
     test "active_iface is nil when no interface is eligible" do
       s = state([iface(iface: "eth0", intent: nil, connection: :internet)])
-      assert State.status(s, :unset).active_iface == nil
+      assert Roster.status(s, :unset).active_iface == nil
     end
 
     test "active_iface is the first eligible interface" do
@@ -150,7 +149,7 @@ defmodule VintageNetProxy.Selector.StateTest do
           iface(iface: "wlan0", intent: %{mode: :direct}, connection: :internet)
         ])
 
-      assert State.status(s, :direct).active_iface == "wlan0"
+      assert Roster.status(s, :direct).active_iface == "wlan0"
     end
 
     test "by_interface contains an entry for every configured interface" do
@@ -160,7 +159,7 @@ defmodule VintageNetProxy.Selector.StateTest do
           iface(iface: "wlan0", intent: %{mode: :direct}, connection: :internet)
         ])
 
-      status = State.status(s, :direct)
+      status = Roster.status(s, :direct)
       assert Map.keys(status.by_interface) |> Enum.sort() == ["eth0", "wlan0"]
       assert status.by_interface["eth0"].intent == nil
       assert status.by_interface["wlan0"].intent == %{mode: :direct}
@@ -168,7 +167,7 @@ defmodule VintageNetProxy.Selector.StateTest do
 
     test "current passes through unchanged" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
-      assert State.status(s, :anything).current == :anything
+      assert Roster.status(s, :anything).current == :anything
     end
   end
 
@@ -177,18 +176,18 @@ defmodule VintageNetProxy.Selector.StateTest do
       eth0 = iface(iface: "eth0", intent: nil, connection: :internet)
       s = state([eth0])
 
-      s = State.update_iface(s, "eth0", fn st -> %{st | intent: %{mode: :direct}} end)
+      s = Roster.update_iface(s, "eth0", fn st -> %{st | intent: %{mode: :direct}} end)
 
-      assert State.value(s) == :direct
+      assert Roster.value(s) == :direct
     end
 
     test "no-op for an interface not in the priority list" do
       eth0 = iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)
       s = state([eth0])
 
-      s = State.update_iface(s, "wlan0", fn st -> %{st | intent: nil} end)
+      s = Roster.update_iface(s, "wlan0", fn st -> %{st | intent: nil} end)
 
-      assert State.value(s) == :direct
+      assert Roster.value(s) == :direct
       assert Map.keys(s.states) == ["eth0"]
     end
   end
