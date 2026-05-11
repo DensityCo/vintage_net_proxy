@@ -250,6 +250,88 @@ defmodule VintageNetProxy.PACTest do
     end
   end
 
+  describe "find_proxy/2 — JS comments" do
+    test "inline line comment between predicate and return is stripped" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (isPlainHostName(host))  // bypass intranet hosts
+          return "DIRECT";
+        return "PROXY p:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://intranet/") == :direct
+
+      assert PAC.find_proxy(script, "http://google.com/") ==
+               %{scheme: :http, host: "p", port: 8080}
+    end
+
+    test "inline block comment between predicate and return is stripped" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (isPlainHostName(host)) /* bypass */ return "DIRECT";
+        return "PROXY p:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://intranet/") == :direct
+    end
+
+    test "multi-line block comment is stripped" do
+      script = """
+      function FindProxyForURL(url, host) {
+        /* This file is auto-generated.
+         * Do not edit by hand. */
+        if (isPlainHostName(host)) return "DIRECT";
+        return "PROXY p:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://intranet/") == :direct
+
+      assert PAC.find_proxy(script, "http://google.com/") ==
+               %{scheme: :http, host: "p", port: 8080}
+    end
+
+    test "comments scattered through a realistic WPAD don't break rule chaining" do
+      script = """
+      // PAC file for ACME Corp
+      // Last updated: 2026-05
+      function FindProxyForURL(url, host) {
+        // Bypass internal traffic
+        if (isPlainHostName(host)) return "DIRECT";
+        if (dnsDomainIs(host, ".corp.acme")) return "DIRECT"; // intranet
+        // Everything else
+        return "PROXY proxy.acme:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://intranet/") == :direct
+      assert PAC.find_proxy(script, "https://wiki.corp.acme/") == :direct
+
+      assert PAC.find_proxy(script, "https://github.com/") ==
+               %{scheme: :http, host: "proxy.acme", port: 8080}
+    end
+
+    test "line comment does not eat into the next rule" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (host == "a") return "DIRECT"; // first rule
+        if (host == "b") return "PROXY p:80";
+        return "PROXY q:90";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://a/") == :direct
+      assert PAC.find_proxy(script, "http://b/") == %{scheme: :http, host: "p", port: 80}
+      assert PAC.find_proxy(script, "http://c/") == %{scheme: :http, host: "q", port: 90}
+    end
+
+    test "comment-only script returns :direct" do
+      assert PAC.find_proxy("// just a header\n/* nothing here */", "http://x/") == :direct
+    end
+  end
+
   describe "find_proxy/2 — robustness" do
     test "empty script → direct" do
       assert PAC.find_proxy("", "http://x/") == :direct

@@ -47,6 +47,7 @@ defmodule VintageNetProxy.PAC do
 
   @spec find_proxy(String.t(), String.t()) :: directive()
   def find_proxy(script, url) when is_binary(script) and is_binary(url) do
+    script = strip_comments(script)
     host = host_from_url(url)
     rules = extract_rules(script)
 
@@ -57,6 +58,16 @@ defmodule VintageNetProxy.PAC do
 
     (matched || extract_default(script) || "DIRECT")
     |> parse_directive()
+  end
+
+  # JS-style comments break the rule-extraction regex when they sit between
+  # the predicate's `)` and `return`. Strip them up front. Not string-aware:
+  # a `//` inside a quoted pattern is rare in real WPAD files and would
+  # only affect rules whose predicate this evaluator couldn't match anyway.
+  defp strip_comments(script) do
+    script
+    |> String.replace(~r{/\*.*?\*/}us, " ")
+    |> String.replace(~r{//[^\n]*}u, " ")
   end
 
   defp extract_rules(script) do
