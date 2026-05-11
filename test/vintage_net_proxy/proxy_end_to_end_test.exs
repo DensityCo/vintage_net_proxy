@@ -147,6 +147,98 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
     end
   end
 
+  describe "real udhcpc → OSEventDispatcher → our pipeline" do
+    # Exercises VintageNet's actual udhcpc entry point with a realistic
+    # env hash (the same shape udhcpc passes to its handler script when a
+    # lease arrives). Closes the loop that the other tests fake with a
+    # direct `PropertyTable.put` to dhcp_options.
+    setup do
+      previous = Application.get_env(:vintage_net, :udhcpc_handler)
+      Application.put_env(:vintage_net, :udhcpc_handler, __MODULE__.NoOpUdhcpcHandler)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:vintage_net, :udhcpc_handler, previous),
+          else: Application.delete_env(:vintage_net, :udhcpc_handler)
+      end)
+
+      :ok
+    end
+
+    test "a `bound` event with `wpad` flows end-to-end to :auto", %{iface: iface} do
+      # :auto intent without an explicit pac_url — forces us to depend on
+      # the wpad URL arriving from DHCP.
+      PropertyTable.put(VintageNet, ["interface", iface, "config"], %{
+        type: :fake,
+        proxy: %{mode: :auto}
+      })
+
+      # Realistic udhcpc env: string keys, IP-as-string values, plus the
+      # wpad URL (DHCP option 252) for which this whole library exists.
+      env = %{
+        "interface" => iface,
+        "ip" => "10.0.0.5",
+        "mask" => "24",
+        "subnet" => "255.255.255.0",
+        "router" => "10.0.0.1",
+        "dns" => "10.0.0.1",
+        "lease" => "86400",
+        "siaddr" => "10.0.0.1",
+        "serverid" => "10.0.0.1",
+        "wpad" => @wpad_url
+      }
+
+      VintageNet.OSEventDispatcher.dispatch(["bound"], env)
+      flush(iface)
+
+      status = VintageNetProxy.status().by_interface[iface]
+      assert status.dhcp_wpad_url == @wpad_url
+      assert status.pac_loaded? == true
+      assert VintageNet.get(["proxy", "config"]) == :auto
+
+      assert VintageNetProxy.resolve("https://www.google.com/") ==
+               %{scheme: :http, host: @proxy_host, port: @proxy_port}
+    end
+
+    test "a `deconfig` event clears the cached wpad URL", %{iface: iface} do
+      # First load a wpad URL.
+      PropertyTable.put(VintageNet, ["interface", iface, "config"], %{
+        type: :fake,
+        proxy: %{mode: :auto}
+      })
+
+      env_bound = %{"interface" => iface, "ip" => "10.0.0.5", "wpad" => @wpad_url}
+      VintageNet.OSEventDispatcher.dispatch(["bound"], env_bound)
+      flush(iface)
+      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url == @wpad_url
+
+      # Now lose the lease.
+      VintageNet.OSEventDispatcher.dispatch(["deconfig"], %{"interface" => iface})
+      flush(iface)
+
+      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url == nil
+    end
+  end
+
+  defmodule NoOpUdhcpcHandler do
+    @moduledoc false
+    # Skip vintage_net's real interface manipulation (ifconfig, route
+    # setup) — we just want to exercise the udhcpc-env → PropertyTable
+    # bridge that OSEventDispatcher provides.
+    @behaviour VintageNet.OSEventDispatcher.UdhcpcHandler
+
+    @impl true
+    def deconfig(_ifname, _info), do: :ok
+    @impl true
+    def leasefail(_ifname, _info), do: :ok
+    @impl true
+    def nak(_ifname, _info), do: :ok
+    @impl true
+    def renew(_ifname, _info), do: :ok
+    @impl true
+    def bound(_ifname, _info), do: :ok
+  end
+
   describe "actual HTTP round-trip through the resolved proxy" do
     # Sends a real HTTP request through tinyproxy at the descriptor that
     # `VintageNetProxy.resolve/1` returns, and asserts it gets forwarded
