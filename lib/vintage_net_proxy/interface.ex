@@ -46,10 +46,12 @@ defmodule VintageNetProxy.Interface do
     end)
 
     state =
-      %__MODULE__{iface: iface}
+      %__MODULE__{
+        iface: iface,
+        connection: VintageNet.get(["interface", iface, "connection"])
+      }
       |> load_intent()
       |> load_wpad()
-      |> load_connection()
       |> refresh_pac_if_needed()
 
     publish(state)
@@ -60,8 +62,17 @@ defmodule VintageNetProxy.Interface do
   def handle_call(:snapshot, _from, state),
     do: {:reply, snapshot_of(state), state}
 
-  def handle_call({:resolve, url}, _from, state),
-    do: {:reply, resolve_for(state, url), state}
+  def handle_call({:resolve, url}, _from, state) do
+    reply =
+      case state.intent do
+        %{mode: :direct} -> :direct
+        %{mode: :manual} = m -> Config.to_descriptor(m)
+        %{mode: :auto} when is_binary(state.pac_script) -> PAC.find_proxy(state.pac_script, url)
+        _ -> :direct
+      end
+
+    {:reply, reply, state}
+  end
 
   @impl true
   def handle_info(
@@ -123,10 +134,6 @@ defmodule VintageNetProxy.Interface do
     %{state | dhcp_wpad: wpad}
   end
 
-  defp load_connection(state) do
-    %{state | connection: VintageNet.get(["interface", state.iface, "connection"])}
-  end
-
   defp refresh_pac_if_needed(state) do
     cond do
       state.connection not in @up_states ->
@@ -134,24 +141,23 @@ defmodule VintageNetProxy.Interface do
 
       true ->
         case effective_pac_url(state) do
-          nil -> %{state | pac_script: nil}
-          url -> fetch_pac(state, url)
+          nil ->
+            %{state | pac_script: nil}
+
+          url ->
+            case Fetcher.get(url) do
+              {:ok, script} ->
+                %{state | pac_script: script}
+
+              {:error, reason} ->
+                Logger.warning(
+                  "VintageNetProxy: PAC fetch failed on #{state.iface} " <>
+                    "(#{inspect(url)}): #{inspect(reason)}"
+                )
+
+                state
+            end
         end
-    end
-  end
-
-  defp fetch_pac(state, url) do
-    case Fetcher.get(url) do
-      {:ok, script} ->
-        %{state | pac_script: script}
-
-      {:error, reason} ->
-        Logger.warning(
-          "VintageNetProxy: PAC fetch failed on #{state.iface} " <>
-            "(#{inspect(url)}): #{inspect(reason)}"
-        )
-
-        state
     end
   end
 
@@ -183,12 +189,4 @@ defmodule VintageNetProxy.Interface do
     }
   end
 
-  defp resolve_for(%{intent: %{mode: :direct}}, _url), do: :direct
-  defp resolve_for(%{intent: %{mode: :manual} = m}, _url), do: Config.to_descriptor(m)
-
-  defp resolve_for(%{intent: %{mode: :auto}, pac_script: script}, url)
-       when is_binary(script),
-       do: PAC.find_proxy(script, url)
-
-  defp resolve_for(_, _url), do: :direct
 end
