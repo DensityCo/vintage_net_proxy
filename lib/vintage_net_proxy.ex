@@ -85,7 +85,7 @@ defmodule VintageNetProxy do
   supplied URL.
   """
 
-  alias VintageNetProxy.{Published, Selector}
+  alias VintageNetProxy.{Publisher, Selector}
 
   @type scheme :: :http | :https | :socks4 | :socks5
 
@@ -106,19 +106,19 @@ defmodule VintageNetProxy do
 
   @doc "Property table key under which the resolved proxy is published."
   @spec property() :: [String.t()]
-  def property, do: Published.property()
+  def property, do: Publisher.property()
 
   @doc "Subscribe to changes on the resolved proxy property."
   @spec subscribe() :: :ok
-  def subscribe, do: VintageNet.subscribe(Published.property())
+  def subscribe, do: VintageNet.subscribe(Publisher.property())
 
   @doc "Unsubscribe from the resolved proxy property."
   @spec unsubscribe() :: :ok
-  def unsubscribe, do: VintageNet.unsubscribe(Published.property())
+  def unsubscribe, do: VintageNet.unsubscribe(Publisher.property())
 
   @doc "Current proxy model."
   @spec get() :: proxy()
-  def get, do: Published.get()
+  def get, do: Publisher.get()
 
   @doc """
   Introspection snapshot — current internal state.

@@ -159,7 +159,7 @@ VintageNetProxy.Supervisor
 └── VintageNetProxy.Selector   (GenServer: subscribes + dispatches)
         ├── VintageNetProxy.Roster      (pure: priority list + active picker)
         ├── VintageNetProxy.Interface   (pure: per-iface struct + transitions)
-        └── VintageNetProxy.Published   (owns the published-config property)
+        └── VintageNetProxy.Publisher   (owns the published-config property)
 ```
 
 The `Selector` GenServer is a thin shim: on init it calls
@@ -168,7 +168,7 @@ The `Selector` GenServer is a thin shim: on init it calls
 `connection` keys), builds a `Roster` from their initial states via
 `Roster.load/1`, then routes each subsequent property event to the
 matching `Interface.on_config/2`, `Interface.on_dhcp_options/2`, or
-`Interface.on_connection/2`, and calls `Published.put/1` after each
+`Interface.on_connection/2`, and calls `Publisher.put/1` after each
 update.
 
 The non-process modules:
@@ -186,7 +186,7 @@ The non-process modules:
     rosters by hand); `Roster.load/1` is the impure counterpart that
     reads each interface's initial state from the PropertyTable.
 
-  * `VintageNetProxy.Published` — owns the single public PropertyTable
+  * `VintageNetProxy.Publisher` — owns the single public PropertyTable
     key this library writes (`["proxy", "config"]`). Three calls:
     `put/1`, `get/0`, `property/0`. Selector is the only caller.
 
