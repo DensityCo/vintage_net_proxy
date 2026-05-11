@@ -45,7 +45,8 @@ defmodule VintageNetProxy.PACTest do
     end
 
     test "fallback list returns the first recognized entry" do
-      script = ~s|function FindProxyForURL(url, host) { return "PROXY a.example:1; PROXY b.example:2; DIRECT"; }|
+      script =
+        ~s|function FindProxyForURL(url, host) { return "PROXY a.example:1; PROXY b.example:2; DIRECT"; }|
 
       assert PAC.find_proxy(script, "https://x.example/") ==
                %{scheme: :http, host: "a.example", port: 1}
@@ -139,7 +140,8 @@ defmodule VintageNetProxy.PACTest do
 
   describe "find_proxy/2 — host equality" do
     test "host == literal" do
-      script = ~s|function FindProxyForURL(url, host) { if (host == "intranet") return "DIRECT"; return "PROXY p:80"; }|
+      script =
+        ~s|function FindProxyForURL(url, host) { if (host == "intranet") return "DIRECT"; return "PROXY p:80"; }|
 
       assert PAC.find_proxy(script, "http://intranet/") == :direct
 

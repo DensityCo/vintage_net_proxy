@@ -1,22 +1,28 @@
 defmodule VintageNetProxy.ServerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias VintageNetProxy.Server
 
   setup do
-    Application.put_env(:vintage_net_proxy, :persistence, VintageNetProxy.Persistence.Null)
-    start_supervised!({PropertyTable, name: VintageNet})
-
     iface = "test#{:erlang.unique_integer([:positive])}"
+    config_property = ["interface", iface, "config"]
+    dhcp_property = ["interface", iface, "dhcp_options"]
+
     pid = start_supervised!({Server, [interface: iface]})
 
-    on_exit(fn -> Application.delete_env(:vintage_net_proxy, :persistence) end)
+    on_exit(fn ->
+      PropertyTable.delete(VintageNet, config_property)
+      PropertyTable.delete(VintageNet, dhcp_property)
+      PropertyTable.delete(VintageNet, ["proxy", "config"])
+    end)
 
-    {:ok, iface: iface, pid: pid}
+    {:ok, iface: iface, pid: pid, config_property: config_property, dhcp_property: dhcp_property}
   end
 
   describe "initial state" do
-    test "publishes :unset" do
+    test "publishes :unset when nothing is configured" do
       assert VintageNet.get(["proxy", "config"]) == :unset
     end
 
@@ -24,41 +30,126 @@ defmodule VintageNetProxy.ServerTest do
       status = Server.status()
       assert status.iface == iface
       assert status.target_url == nil
-      assert status.wpad_url == nil
-      assert status.override == nil
+      assert status.intent == nil
+      assert status.dhcp_wpad_url == nil
+      assert status.legacy_override == nil
       assert status.pac_loaded? == false
       assert status.current == :unset
     end
   end
 
-  describe "manual override" do
-    test "set_override(:direct) publishes :direct" do
-      assert :ok = Server.set_override(:direct)
+  describe "intent: :direct from interface config" do
+    test "publishes :direct when interface config carries proxy: %{mode: :direct}",
+         %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+
+      # Subscription delivery is async; pull status to flush.
+      _ = Server.status()
       assert VintageNet.get(["proxy", "config"]) == :direct
     end
 
-    test "set_override(descriptor) publishes the descriptor" do
-      desc = %{scheme: :http, host: "p.corp", port: 8080}
-      assert :ok = Server.set_override(desc)
-      assert VintageNet.get(["proxy", "config"]) == desc
+    test "publishes :unset when proxy field is removed",
+         %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      _ = Server.status()
+      assert VintageNet.get(["proxy", "config"]) == :direct
+
+      PropertyTable.put(VintageNet, prop, %{type: :fake})
+      _ = Server.status()
+      assert VintageNet.get(["proxy", "config"]) == :unset
+    end
+  end
+
+  describe "intent: :manual from interface config" do
+    test "publishes the resolved descriptor", %{config_property: prop} do
+      manual = %{mode: :manual, scheme: :http, host: "p.corp", port: 8080}
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
+
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) == %{
+               scheme: :http,
+               host: "p.corp",
+               port: 8080
+             }
     end
 
-    test "set_override with auth in descriptor preserves all fields" do
-      desc = %{scheme: :socks5, host: "s.corp", port: 1080, username: "alice", password: "x"}
-      assert :ok = Server.set_override(desc)
-      assert VintageNet.get(["proxy", "config"]) == desc
+    test "preserves credentials in the published descriptor", %{config_property: prop} do
+      manual = %{
+        mode: :manual,
+        scheme: :socks5,
+        host: "s.corp",
+        port: 1080,
+        username: "alice",
+        password: "secret"
+      }
+
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) == %{
+               scheme: :socks5,
+               host: "s.corp",
+               port: 1080,
+               username: "alice",
+               password: "secret"
+             }
     end
 
-    test "clear_override reverts to :unset" do
-      Server.set_override(:direct)
-      assert :ok = Server.clear_override()
+    test "defaults scheme to :http when omitted", %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :manual, host: "p", port: 80}
+      })
+
+      _ = Server.status()
+
+      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p", port: 80}
+    end
+  end
+
+  describe "intent: :auto with DHCP-discovered WPAD" do
+    test "ignores DHCP wpad when no proxy intent is set",
+         %{dhcp_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
+      _ = Server.status()
+
+      # No intent means no proxy is resolved, even if DHCP advertised WPAD.
       assert VintageNet.get(["proxy", "config"]) == :unset
     end
 
-    test "override survives target_url change" do
-      Server.set_override(:direct)
-      Server.set_target_url("https://x/")
-      assert VintageNet.get(["proxy", "config"]) == :direct
+    test "records DHCP wpad URL in status", %{dhcp_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
+      status = Server.status()
+      assert status.dhcp_wpad_url == "http://wpad.test/wpad.dat"
+    end
+
+    test "clears DHCP wpad URL when the dhcp_options property is cleared",
+         %{dhcp_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
+      _ = Server.status()
+      assert Server.status().dhcp_wpad_url == "http://wpad.test/wpad.dat"
+
+      PropertyTable.delete(VintageNet, prop)
+      _ = Server.status()
+      assert Server.status().dhcp_wpad_url == nil
+    end
+  end
+
+  describe "invalid proxy config in interface config" do
+    test "logs a warning and leaves intent nil", %{config_property: prop} do
+      log =
+        capture_log(fn ->
+          PropertyTable.put(VintageNet, prop, %{
+            type: :fake,
+            proxy: %{mode: :manual, host: "p"}
+          })
+
+          _ = Server.status()
+        end)
+
+      assert log =~ "invalid :proxy config"
+      assert VintageNet.get(["proxy", "config"]) == :unset
     end
   end
 
@@ -73,47 +164,74 @@ defmodule VintageNetProxy.ServerTest do
     end
   end
 
-  describe "wpad_url" do
-    test "set_wpad_url writes to the property table", %{iface: iface} do
-      assert :ok = Server.set_wpad_url("http://wpad.test/wpad.dat")
-      # The Server's own subscription will fire and try to fetch; that fetch
-      # will fail (no real server), but the property is set regardless.
-      assert VintageNet.get(["interface", iface, "wpad_url"]) == "http://wpad.test/wpad.dat"
-    end
-
-    test "clear_wpad_url removes from the property table", %{iface: iface} do
-      Server.set_wpad_url("http://wpad.test/wpad.dat")
-      assert :ok = Server.clear_wpad_url()
-      assert VintageNet.get(["interface", iface, "wpad_url"]) == nil
-    end
-  end
-
   describe "resolve/1" do
-    test "respects manual override regardless of URL" do
-      Server.set_override(:direct)
-      assert Server.resolve("https://api.example.com/") == :direct
-      assert Server.resolve("http://intranet/") == :direct
+    test "respects manual intent regardless of URL", %{config_property: prop} do
+      manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
+      _ = Server.status()
 
-      desc = %{scheme: :http, host: "p", port: 80}
-      Server.set_override(desc)
-      assert Server.resolve("https://anywhere/") == desc
+      assert Server.resolve("https://api.example.com/") ==
+               %{scheme: :http, host: "p", port: 80}
+
+      assert Server.resolve("http://intranet/") ==
+               %{scheme: :http, host: "p", port: 80}
     end
 
-    test ":direct when no script and no override" do
+    test "returns :direct for :direct intent", %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      _ = Server.status()
+
+      assert Server.resolve("https://x/") == :direct
+    end
+
+    test ":direct when no intent and no override" do
       assert Server.resolve("https://x/") == :direct
     end
   end
 
+  describe "deprecated legacy API" do
+    test "set_override(:direct) still works but logs deprecation" do
+      log = capture_log(fn -> assert :ok = Server.set_override(:direct) end)
+      assert log =~ "deprecated"
+      assert VintageNet.get(["proxy", "config"]) == :direct
+    end
+
+    test "legacy override takes precedence over interface config intent",
+         %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      _ = Server.status()
+      assert VintageNet.get(["proxy", "config"]) == :direct
+
+      desc = %{scheme: :http, host: "override", port: 9999}
+      capture_log(fn -> Server.set_override(desc) end)
+      assert VintageNet.get(["proxy", "config"]) == desc
+    end
+
+    test "clear_override reverts to the interface config intent",
+         %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      _ = Server.status()
+
+      capture_log(fn ->
+        Server.set_override(%{scheme: :http, host: "x", port: 80})
+      end)
+
+      assert VintageNet.get(["proxy", "config"]) != :direct
+
+      assert :ok = Server.clear_override()
+      assert VintageNet.get(["proxy", "config"]) == :direct
+    end
+  end
+
   describe "status/0" do
-    test "reflects override + target_url", %{iface: iface} do
-      Server.set_override(:direct)
+    test "reflects interface config intent + target_url", %{config_property: prop} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      _ = Server.status()
       Server.set_target_url("https://x/")
 
       status = Server.status()
-      assert status.iface == iface
+      assert status.intent == %{mode: :direct}
       assert status.target_url == "https://x/"
-      assert status.override == :direct
-      assert status.pac_loaded? == false
       assert status.current == :direct
     end
   end
