@@ -7,17 +7,15 @@ defmodule VintageNetProxy.Server do
   alias VintageNetProxy.{Config, Fetcher, PAC}
 
   @property ["proxy", "config"]
-  @default_iface "wlan0"
   @fallback_target_url "http://localhost/"
+  @up_states [:internet, :lan]
 
-  defstruct iface: @default_iface,
-            config_property: nil,
-            dhcp_property: nil,
-            lower_up_property: nil,
-            intent: nil,
-            dhcp_wpad: nil,
-            pac_script: nil,
-            target_url: nil
+  defmodule InterfaceState do
+    @moduledoc false
+    defstruct intent: nil, dhcp_wpad: nil, pac_script: nil, connection: nil
+  end
+
+  defstruct interfaces: [], ifaces: %{}, target_url: nil
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -31,44 +29,33 @@ defmodule VintageNetProxy.Server do
 
   @impl true
   def init(opts) do
-    iface = Keyword.get(opts, :interface, @default_iface)
+    interfaces = Keyword.get(opts, :interfaces, [])
 
     state = %__MODULE__{
-      iface: iface,
-      config_property: ["interface", iface, "config"],
-      dhcp_property: ["interface", iface, "dhcp_options"],
-      lower_up_property: ["interface", iface, "lower_up"],
+      interfaces: interfaces,
+      ifaces: Map.new(interfaces, fn name -> {name, %InterfaceState{}} end),
       target_url: Keyword.get(opts, :target_url)
     }
 
-    VintageNet.subscribe(state.config_property)
-    VintageNet.subscribe(state.dhcp_property)
-    VintageNet.subscribe(state.lower_up_property)
-
     state =
-      state
-      |> load_intent_from_property()
-      |> load_wpad_from_property()
-      |> refresh_pac_if_needed()
+      Enum.reduce(interfaces, state, fn name, acc ->
+        Enum.each(["config", "dhcp_options", "connection"], fn prop ->
+          VintageNet.subscribe(["interface", name, prop])
+        end)
+
+        acc
+        |> load_intent(name)
+        |> load_wpad(name)
+        |> load_connection(name)
+        |> refresh_pac_if_needed(name)
+      end)
 
     publish(state)
     {:ok, state}
   end
 
   @impl true
-  def handle_call(:status, _from, state) do
-    status = %{
-      iface: state.iface,
-      target_url: state.target_url,
-      intent: state.intent,
-      pac_url: effective_pac_url(state),
-      dhcp_wpad_url: state.dhcp_wpad,
-      pac_loaded?: not is_nil(state.pac_script),
-      current: value(state)
-    }
-
-    {:reply, status, state}
-  end
+  def handle_call(:status, _from, state), do: {:reply, build_status(state), state}
 
   def handle_call({:resolve, url}, _from, state) do
     {:reply, resolve_for(state, url), state}
@@ -80,117 +67,221 @@ defmodule VintageNetProxy.Server do
     {:reply, :ok, new_state}
   end
 
-  def handle_call(:get_target_url, _from, state) do
-    {:reply, state.target_url, state}
-  end
+  def handle_call(:get_target_url, _from, state), do: {:reply, state.target_url, state}
 
   @impl true
-  def handle_info({VintageNet, prop, _old, _new, _meta}, %{config_property: prop} = state) do
-    new_state =
-      state
-      |> load_intent_from_property()
-      |> refresh_pac_if_needed()
+  def handle_info({VintageNet, ["interface", name, "config"], _o, _n, _m}, state) do
+    if Map.has_key?(state.ifaces, name) do
+      new_state =
+        state
+        |> load_intent(name)
+        |> refresh_pac_if_needed(name)
 
-    publish(new_state)
-    {:noreply, new_state}
+      publish(new_state)
+      {:noreply, new_state}
+    else
+      {:noreply, state}
+    end
   end
 
-  def handle_info({VintageNet, prop, _old, _new, _meta}, %{dhcp_property: prop} = state) do
-    new_state =
-      state
-      |> load_wpad_from_property()
-      |> refresh_pac_if_needed()
+  def handle_info({VintageNet, ["interface", name, "dhcp_options"], _o, _n, _m}, state) do
+    if Map.has_key?(state.ifaces, name) do
+      new_state =
+        state
+        |> load_wpad(name)
+        |> refresh_pac_if_needed(name)
 
-    publish(new_state)
-    {:noreply, new_state}
+      publish(new_state)
+      {:noreply, new_state}
+    else
+      {:noreply, state}
+    end
   end
 
-  def handle_info(
-        {VintageNet, prop, _old, true, _meta},
-        %{lower_up_property: prop} = state
-      ) do
-    new_state = refresh_pac_if_needed(state)
-    publish(new_state)
-    {:noreply, new_state}
+  def handle_info({VintageNet, ["interface", name, "connection"], _o, conn, _m}, state) do
+    if Map.has_key?(state.ifaces, name) do
+      new_state =
+        state
+        |> put_iface(name, &%{&1 | connection: conn})
+        |> on_connection_change(name, conn)
+
+      publish(new_state)
+      {:noreply, new_state}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp load_intent_from_property(state) do
-    case VintageNet.get(state.config_property) do
-      %{proxy: raw} when is_map(raw) ->
-        case Config.normalize(raw) do
-          {:ok, intent} ->
-            %{state | intent: intent}
+  defp on_connection_change(state, name, conn) when conn in @up_states,
+    do: refresh_pac_if_needed(state, name)
 
-          {:error, reason} ->
-            Logger.warning("VintageNetProxy: invalid :proxy config on #{state.iface}: #{reason}")
+  defp on_connection_change(state, name, _conn),
+    do: put_iface(state, name, &%{&1 | pac_script: nil})
 
-            %{state | intent: nil}
+  defp load_intent(state, name) do
+    intent =
+      case VintageNet.get(["interface", name, "config"]) do
+        %{proxy: raw} when is_map(raw) ->
+          case Config.normalize(raw) do
+            {:ok, i} ->
+              i
+
+            {:error, reason} ->
+              Logger.warning("VintageNetProxy: invalid :proxy config on #{name}: #{reason}")
+              nil
+          end
+
+        _ ->
+          nil
+      end
+
+    put_iface(state, name, &%{&1 | intent: intent})
+  end
+
+  defp load_wpad(state, name) do
+    wpad =
+      case VintageNet.get(["interface", name, "dhcp_options"]) do
+        %{wpad: url} when is_binary(url) and url != "" -> url
+        _ -> nil
+      end
+
+    put_iface(state, name, &%{&1 | dhcp_wpad: wpad})
+  end
+
+  defp load_connection(state, name) do
+    conn = VintageNet.get(["interface", name, "connection"])
+    put_iface(state, name, &%{&1 | connection: conn})
+  end
+
+  defp put_iface(state, name, fun) do
+    case Map.fetch(state.ifaces, name) do
+      {:ok, iface} -> %{state | ifaces: Map.put(state.ifaces, name, fun.(iface))}
+      :error -> state
+    end
+  end
+
+  defp refresh_pac_if_needed(state, name) do
+    iface = Map.get(state.ifaces, name) || %InterfaceState{}
+
+    cond do
+      iface.connection not in @up_states ->
+        put_iface(state, name, &%{&1 | pac_script: nil})
+
+      true ->
+        case effective_pac_url(iface) do
+          nil -> put_iface(state, name, &%{&1 | pac_script: nil})
+          url -> fetch_pac(state, name, url)
         end
-
-      _ ->
-        %{state | intent: nil}
     end
   end
 
-  defp load_wpad_from_property(state) do
-    case VintageNet.get(state.dhcp_property) do
-      %{wpad: url} when is_binary(url) and url != "" ->
-        %{state | dhcp_wpad: url}
-
-      _ ->
-        %{state | dhcp_wpad: nil}
-    end
-  end
-
-  defp refresh_pac_if_needed(state) do
-    case effective_pac_url(state) do
-      nil ->
-        %{state | pac_script: nil}
-
-      url ->
-        fetch_pac(state, url)
-    end
-  end
-
-  defp fetch_pac(state, url) do
+  defp fetch_pac(state, name, url) do
     case Fetcher.get(url) do
       {:ok, script} ->
-        %{state | pac_script: script}
+        put_iface(state, name, &%{&1 | pac_script: script})
 
       {:error, reason} ->
-        Logger.warning("VintageNetProxy: PAC fetch failed (#{inspect(url)}): #{inspect(reason)}")
+        Logger.warning(
+          "VintageNetProxy: PAC fetch failed on #{name} (#{inspect(url)}): #{inspect(reason)}"
+        )
 
         state
     end
   end
 
-  # Effective PAC URL — which URL to evaluate right now. Explicit `:pac_url`
-  # in the intent wins; otherwise fall back to the DHCP-discovered WPAD URL.
-  defp effective_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url), do: url
-  defp effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad: url}) when is_binary(url), do: url
+  # Explicit `:pac_url` in the intent wins; otherwise fall back to the
+  # DHCP-discovered WPAD URL.
+  defp effective_pac_url(%InterfaceState{intent: %{mode: :auto, pac_url: url}})
+       when is_binary(url),
+       do: url
+
+  defp effective_pac_url(%InterfaceState{intent: %{mode: :auto}, dhcp_wpad: url})
+       when is_binary(url),
+       do: url
+
   defp effective_pac_url(_), do: nil
 
   defp publish(state), do: PropertyTable.put(VintageNet, @property, value(state))
 
-  defp value(%{intent: %{mode: :direct}}), do: :direct
-  defp value(%{intent: %{mode: :manual} = m}), do: Config.to_descriptor(m)
+  defp pick_active(state) do
+    Enum.find(state.interfaces, fn name ->
+      case Map.fetch(state.ifaces, name) do
+        {:ok, %{intent: intent, connection: conn}}
+        when not is_nil(intent) and conn in @up_states ->
+          true
 
-  defp value(%{intent: %{mode: :auto}, pac_script: script, target_url: target})
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp value(state) do
+    case pick_active(state) do
+      nil -> :unset
+      name -> iface_value(Map.fetch!(state.ifaces, name), state.target_url)
+    end
+  end
+
+  defp iface_value(%{intent: %{mode: :direct}}, _target), do: :direct
+  defp iface_value(%{intent: %{mode: :manual} = m}, _target), do: Config.to_descriptor(m)
+
+  defp iface_value(%{intent: %{mode: :auto}, pac_script: script}, target)
        when is_binary(script) do
     PAC.find_proxy(script, target || @fallback_target_url)
   end
 
-  defp value(_), do: :unset
+  defp iface_value(_, _), do: :unset
 
-  # Per-URL resolution evaluates PAC against the supplied URL.
-  defp resolve_for(%{intent: %{mode: :direct}}, _url), do: :direct
-  defp resolve_for(%{intent: %{mode: :manual} = m}, _url), do: Config.to_descriptor(m)
+  defp resolve_for(state, url) do
+    case pick_active(state) do
+      nil -> :direct
+      name -> iface_resolve(Map.fetch!(state.ifaces, name), url)
+    end
+  end
 
-  defp resolve_for(%{intent: %{mode: :auto}, pac_script: script}, url) when is_binary(script) do
+  defp iface_resolve(%{intent: %{mode: :direct}}, _url), do: :direct
+  defp iface_resolve(%{intent: %{mode: :manual} = m}, _url), do: Config.to_descriptor(m)
+
+  defp iface_resolve(%{intent: %{mode: :auto}, pac_script: script}, url)
+       when is_binary(script) do
     PAC.find_proxy(script, url)
   end
 
-  defp resolve_for(_, _url), do: :direct
+  defp iface_resolve(_, _url), do: :direct
+
+  defp build_status(state) do
+    active = pick_active(state)
+
+    by_interface =
+      Map.new(state.ifaces, fn {name, s} ->
+        {name,
+         %{
+           intent: s.intent,
+           connection: s.connection,
+           dhcp_wpad_url: s.dhcp_wpad,
+           pac_url: effective_pac_url(s),
+           pac_loaded?: not is_nil(s.pac_script)
+         }}
+      end)
+
+    active_info =
+      case active do
+        nil ->
+          %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}
+
+        name ->
+          Map.fetch!(by_interface, name)
+      end
+
+    Map.merge(active_info, %{
+      interfaces: state.interfaces,
+      active_iface: active,
+      target_url: state.target_url,
+      by_interface: by_interface,
+      current: value(state)
+    })
+  end
 end

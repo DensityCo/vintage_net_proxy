@@ -9,14 +9,19 @@ defmodule VintageNetProxy.ServerTest do
     iface = "test#{:erlang.unique_integer([:positive])}"
     config_property = ["interface", iface, "config"]
     dhcp_property = ["interface", iface, "dhcp_options"]
-    lower_up_property = ["interface", iface, "lower_up"]
+    connection_property = ["interface", iface, "connection"]
 
-    pid = start_supervised!({Server, [interface: iface]})
+    # Seed connection state before the server starts so init/1 sees the
+    # interface as up. Real VintageNet emits this property; tests must
+    # reproduce that to make the interface eligible for selection.
+    PropertyTable.put(VintageNet, connection_property, :internet)
+
+    pid = start_supervised!({Server, [interfaces: [iface]]})
 
     on_exit(fn ->
       PropertyTable.delete(VintageNet, config_property)
       PropertyTable.delete(VintageNet, dhcp_property)
-      PropertyTable.delete(VintageNet, lower_up_property)
+      PropertyTable.delete(VintageNet, connection_property)
       PropertyTable.delete(VintageNet, ["proxy", "config"])
     end)
 
@@ -25,7 +30,7 @@ defmodule VintageNetProxy.ServerTest do
      pid: pid,
      config_property: config_property,
      dhcp_property: dhcp_property,
-     lower_up_property: lower_up_property}
+     connection_property: connection_property}
   end
 
   describe "initial state" do
@@ -35,7 +40,8 @@ defmodule VintageNetProxy.ServerTest do
 
     test "status reports a clean default", %{iface: iface} do
       status = Server.status()
-      assert status.iface == iface
+      assert status.interfaces == [iface]
+      assert status.active_iface == nil
       assert status.target_url == nil
       assert status.intent == nil
       assert status.dhcp_wpad_url == nil
@@ -124,21 +130,23 @@ defmodule VintageNetProxy.ServerTest do
       assert VintageNet.get(["proxy", "config"]) == :unset
     end
 
-    test "records DHCP wpad URL in status", %{dhcp_property: prop} do
+    test "records DHCP wpad URL in status", %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
       status = Server.status()
-      assert status.dhcp_wpad_url == "http://wpad.test/wpad.dat"
+      # No intent on this interface, so it isn't the active one; inspect
+      # the per-interface map directly.
+      assert status.by_interface[iface].dhcp_wpad_url == "http://wpad.test/wpad.dat"
     end
 
     test "clears DHCP wpad URL when the dhcp_options property is cleared",
-         %{dhcp_property: prop} do
+         %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
       _ = Server.status()
-      assert Server.status().dhcp_wpad_url == "http://wpad.test/wpad.dat"
+      assert Server.status().by_interface[iface].dhcp_wpad_url == "http://wpad.test/wpad.dat"
 
       PropertyTable.delete(VintageNet, prop)
       _ = Server.status()
-      assert Server.status().dhcp_wpad_url == nil
+      assert Server.status().by_interface[iface].dhcp_wpad_url == nil
     end
   end
 
@@ -343,8 +351,13 @@ defmodule VintageNetProxy.ServerTest do
       assert Server.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
     end
 
-    test "lower_up coming true re-publishes the resolved descriptor",
-         %{config_property: cprop, lower_up_property: lprop} do
+    test "connection rising to :internet re-fetches PAC and re-publishes",
+         %{config_property: cprop, connection_property: connprop} do
+      # Start with the interface marked offline so the initial fetch is
+      # skipped — even though intent says :auto with an explicit URL.
+      PropertyTable.put(VintageNet, connprop, :disconnected)
+      _ = Server.status()
+
       port =
         serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
 
@@ -357,17 +370,11 @@ defmodule VintageNetProxy.ServerTest do
 
       _ = Server.status()
 
-      assert VintageNet.get(["proxy", "config"]) ==
-               %{scheme: :http, host: "p.corp", port: 8080}
+      # Offline: not selectable, nothing published.
+      assert VintageNet.get(["proxy", "config"]) == :unset
 
-      # Simulate the proxy property being out-of-date (e.g. cleared before
-      # the link was up). When lower_up flips true, the handler must
-      # re-publish so subscribers learn the current value.
-      PropertyTable.delete(VintageNet, ["proxy", "config"])
-      _ = Server.status()
-      assert VintageNet.get(["proxy", "config"]) == nil
-
-      PropertyTable.put(VintageNet, lprop, true)
+      # Link comes up: connection handler must fetch the PAC and publish.
+      PropertyTable.put(VintageNet, connprop, :internet)
       _ = Server.status()
 
       assert VintageNet.get(["proxy", "config"]) ==
@@ -398,6 +405,128 @@ defmodule VintageNetProxy.ServerTest do
 
       assert Server.resolve("https://x.corp.example/") ==
                %{scheme: :http, host: "corp", port: 8080}
+    end
+  end
+
+  describe "multi-interface priority selection" do
+    setup do
+      stop_supervised!(VintageNetProxy.Server)
+
+      primary = "p#{:erlang.unique_integer([:positive])}"
+      secondary = "s#{:erlang.unique_integer([:positive])}"
+
+      PropertyTable.put(VintageNet, ["interface", primary, "connection"], :internet)
+      PropertyTable.put(VintageNet, ["interface", secondary, "connection"], :internet)
+
+      pid = start_supervised!({Server, [interfaces: [primary, secondary]]})
+
+      on_exit(fn ->
+        for iface <- [primary, secondary],
+            prop <- ["config", "dhcp_options", "connection"] do
+          PropertyTable.delete(VintageNet, ["interface", iface, prop])
+        end
+
+        PropertyTable.delete(VintageNet, ["proxy", "config"])
+      end)
+
+      {:ok, primary: primary, secondary: secondary, pid: pid}
+    end
+
+    test "first interface in the list with intent + up connection wins",
+         %{primary: primary, secondary: secondary} do
+      PropertyTable.put(VintageNet, ["interface", secondary, "config"], %{
+        type: :fake,
+        proxy: %{mode: :direct}
+      })
+
+      _ = Server.status()
+      assert Server.status().active_iface == secondary
+      assert VintageNet.get(["proxy", "config"]) == :direct
+
+      # Once primary also has intent, it takes precedence (higher in list).
+      PropertyTable.put(VintageNet, ["interface", primary, "config"], %{
+        type: :fake,
+        proxy: %{mode: :manual, host: "p", port: 80}
+      })
+
+      _ = Server.status()
+      assert Server.status().active_iface == primary
+      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p", port: 80}
+    end
+
+    test "falls back to the next interface when active goes offline, reclaims on reconnect",
+         %{primary: primary, secondary: secondary} do
+      PropertyTable.put(VintageNet, ["interface", primary, "config"], %{
+        type: :fake,
+        proxy: %{mode: :manual, scheme: :http, host: "p1", port: 80}
+      })
+
+      PropertyTable.put(VintageNet, ["interface", secondary, "config"], %{
+        type: :fake,
+        proxy: %{mode: :manual, scheme: :http, host: "s1", port: 80}
+      })
+
+      _ = Server.status()
+      assert Server.status().active_iface == primary
+      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p1", port: 80}
+
+      PropertyTable.put(VintageNet, ["interface", primary, "connection"], :disconnected)
+      _ = Server.status()
+      assert Server.status().active_iface == secondary
+      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "s1", port: 80}
+
+      PropertyTable.put(VintageNet, ["interface", primary, "connection"], :internet)
+      _ = Server.status()
+      assert Server.status().active_iface == primary
+      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p1", port: 80}
+    end
+
+    test "drops cached PAC when an interface disconnects",
+         %{primary: primary} do
+      port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p:1"; }|)
+      Server.set_target_url("https://x/")
+
+      PropertyTable.put(VintageNet, ["interface", primary, "config"], %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      _ = Server.status()
+      assert Server.status().by_interface[primary].pac_loaded? == true
+
+      PropertyTable.put(VintageNet, ["interface", primary, "connection"], :disconnected)
+      _ = Server.status()
+      assert Server.status().by_interface[primary].pac_loaded? == false
+    end
+
+    test "interfaces not in the configured list are ignored",
+         %{primary: primary} do
+      uninvited = "u#{:erlang.unique_integer([:positive])}"
+
+      PropertyTable.put(VintageNet, ["interface", uninvited, "connection"], :internet)
+
+      PropertyTable.put(VintageNet, ["interface", uninvited, "config"], %{
+        type: :fake,
+        proxy: %{mode: :manual, host: "ghost", port: 80}
+      })
+
+      _ = Server.status()
+
+      assert Server.status().active_iface == nil
+      assert VintageNet.get(["proxy", "config"]) == :unset
+
+      # And the legitimate interface still wins when it gets intent.
+      PropertyTable.put(VintageNet, ["interface", primary, "config"], %{
+        type: :fake,
+        proxy: %{mode: :direct}
+      })
+
+      _ = Server.status()
+      assert Server.status().active_iface == primary
+      assert VintageNet.get(["proxy", "config"]) == :direct
+
+      PropertyTable.delete(VintageNet, ["interface", uninvited, "connection"])
+      PropertyTable.delete(VintageNet, ["interface", uninvited, "config"])
     end
   end
 
