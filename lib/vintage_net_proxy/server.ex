@@ -109,7 +109,9 @@ defmodule VintageNetProxy.Server do
         {VintageNet, prop, _old, true, _meta},
         %{lower_up_property: prop} = state
       ) do
-    {:noreply, refresh_pac_if_needed(state)}
+    new_state = refresh_pac_if_needed(state)
+    publish(new_state)
+    {:noreply, new_state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
