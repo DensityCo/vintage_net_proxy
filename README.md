@@ -157,8 +157,8 @@ re-fetches against the (possibly new) network.
 ```
 VintageNetProxy.Supervisor
 └── VintageNetProxy.Selector  (GenServer: subscribes + dispatches + publishes)
-        ├── VintageNetProxy.Selector.State  (pure: priority + active picker)
-        └── VintageNetProxy.Interface       (pure: per-iface struct + transitions)
+        ├── VintageNetProxy.Roster     (pure: priority list + active picker)
+        └── VintageNetProxy.Interface  (pure: per-iface struct + transitions)
 ```
 
 The `Selector` GenServer is a thin shim: on init it calls
@@ -177,10 +177,10 @@ All non-process logic lives in two **pure modules**:
     `:unset`) lives in `Interface.value/1`, next to the state that
     determines it.
 
-  * `VintageNetProxy.Selector.State` — holds `%{iface => Interface.t}`
-    plus the priority list. Knows how to find the active interface
-    and to compute the published `value`, the `resolve` result, and
-    the `status` map. No processes, no PropertyTable.
+  * `VintageNetProxy.Roster` — holds the priority list of interfaces
+    plus `%{iface => Interface.t}`. Knows how to find the active
+    interface and to compute the published `value`, the `resolve`
+    result, and the `status` map. No processes, no PropertyTable.
 
 The Selector GenServer holds a `%State{}` and is the only place that
 calls `VintageNet.subscribe/1`, `PropertyTable.put/3`, or `VintageNet.get/2`.

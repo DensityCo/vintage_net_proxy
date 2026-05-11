@@ -1,4 +1,4 @@
-defmodule VintageNetProxy.Selector.State do
+defmodule VintageNetProxy.Roster do
   @moduledoc false
 
   alias VintageNetProxy.Interface
