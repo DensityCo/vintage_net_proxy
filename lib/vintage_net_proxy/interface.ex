@@ -13,6 +13,21 @@ defmodule VintageNetProxy.Interface do
             pac_script: nil,
             connection: nil
 
+  @type t :: %__MODULE__{
+          iface: String.t() | nil,
+          intent: map() | nil,
+          dhcp_wpad_url: String.t() | nil,
+          pac_script: String.t() | nil,
+          connection: atom() | nil
+        }
+
+  @doc "Subscribe the calling process to the VintageNet PropertyTable keys this Interface needs."
+  def subscribe(iface) do
+    Enum.each(["config", "dhcp_options", "connection"], fn prop ->
+      VintageNet.subscribe(["interface", iface, prop])
+    end)
+  end
+
   @doc "Build initial state by reading current PropertyTable values."
   def load(iface) do
     %__MODULE__{iface: iface}
