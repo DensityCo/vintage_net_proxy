@@ -10,10 +10,18 @@ defmodule VintageNetProxy.Roster do
           states: %{optional(String.t()) => Interface.t()}
         }
 
-  @doc "Build a new state from the configured priority list and the per-iface initial states."
+  @doc "Build a new roster from the priority list and the per-iface states."
   @spec new([String.t()], %{optional(String.t()) => Interface.t()}) :: t()
   def new(interfaces, iface_states),
     do: %__MODULE__{interfaces: interfaces, states: iface_states}
+
+  @doc """
+  Build a roster for `interfaces` by reading each one's initial state from the
+  VintageNet PropertyTable (impure counterpart to `new/2`).
+  """
+  @spec load([String.t()]) :: t()
+  def load(interfaces),
+    do: new(interfaces, Map.new(interfaces, fn iface -> {iface, Interface.load(iface)} end))
 
   @doc """
   Apply `fun` to the state of `iface`. No-op if `iface` isn't in this Selector's list.

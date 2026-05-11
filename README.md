@@ -156,20 +156,21 @@ re-fetches against the (possibly new) network.
 
 ```
 VintageNetProxy.Supervisor
-└── VintageNetProxy.Selector  (GenServer: subscribes + dispatches + publishes)
-        ├── VintageNetProxy.Roster     (pure: priority list + active picker)
-        └── VintageNetProxy.Interface  (pure: per-iface struct + transitions)
+└── VintageNetProxy.Selector   (GenServer: subscribes + dispatches)
+        ├── VintageNetProxy.Roster      (pure: priority list + active picker)
+        ├── VintageNetProxy.Interface   (pure: per-iface struct + transitions)
+        └── VintageNetProxy.Published   (owns the published-config property)
 ```
 
 The `Selector` GenServer is a thin shim: on init it calls
 `Interface.subscribe/1` for each tracked interface (subscribing to
-`config`, `dhcp_options`, and `connection`), loads each interface's
-initial state via `Interface.load/1`, then routes each subsequent
+`config`, `dhcp_options`, and `connection`), builds a `Roster` from
+their initial states via `Roster.load/1`, then routes each subsequent
 property event to the matching `Interface.on_config/2`,
 `Interface.on_dhcp_options/2`, or `Interface.on_connection/2`, and
-publishes after each update.
+calls `Published.put/1` after each update.
 
-All non-process logic lives in two **pure modules**:
+The non-process modules:
 
   * `VintageNetProxy.Interface` — per-interface struct and state
     transitions (`on_*`, `eligible?`, `value`, `resolve`, `snapshot`).
@@ -180,12 +181,18 @@ All non-process logic lives in two **pure modules**:
   * `VintageNetProxy.Roster` — holds the priority list of interfaces
     plus `%{iface => Interface.t}`. Knows how to find the active
     interface and to compute the published `value`, the `resolve`
-    result, and the `status` map. No processes, no PropertyTable.
+    result, and the `status` map. `Roster.new/2` is pure (tests build
+    rosters by hand); `Roster.load/1` is the impure counterpart that
+    reads each interface's initial state from the PropertyTable.
 
-The Selector GenServer holds a `%State{}` and is the only place that
-calls `VintageNet.subscribe/1`, `PropertyTable.put/3`, or `VintageNet.get/2`.
-This makes the priority/selection logic unit-testable without spinning
-up the supervision tree.
+  * `VintageNetProxy.Published` — owns the single public PropertyTable
+    key this library writes (`["proxy", "config"]`). Three calls:
+    `put/1`, `get/0`, `property/0`. Selector is the only caller.
+
+The Selector GenServer is the only place that owns a mailbox or calls
+`VintageNet.subscribe/1`. All priority/selection logic is testable in
+isolation against `Roster` and `Interface` without spinning up the
+supervision tree.
 
 ## Persistence
 
