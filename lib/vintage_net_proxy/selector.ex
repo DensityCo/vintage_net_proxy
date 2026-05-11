@@ -14,7 +14,7 @@ defmodule VintageNetProxy.Selector do
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, []) || []
-    Enum.each(interfaces, &Interface.subscribe/1)
+    Interface.subscribe(interfaces)
     roster = Roster.load(interfaces)
     Published.put(Roster.value(roster))
     {:ok, roster}

@@ -163,12 +163,13 @@ VintageNetProxy.Supervisor
 ```
 
 The `Selector` GenServer is a thin shim: on init it calls
-`Interface.subscribe/1` for each tracked interface (subscribing to
-`config`, `dhcp_options`, and `connection`), builds a `Roster` from
-their initial states via `Roster.load/1`, then routes each subsequent
-property event to the matching `Interface.on_config/2`,
-`Interface.on_dhcp_options/2`, or `Interface.on_connection/2`, and
-calls `Published.put/1` after each update.
+`Interface.subscribe/1` with the list of tracked interfaces
+(subscribing the GenServer to each one's `config`, `dhcp_options`, and
+`connection` keys), builds a `Roster` from their initial states via
+`Roster.load/1`, then routes each subsequent property event to the
+matching `Interface.on_config/2`, `Interface.on_dhcp_options/2`, or
+`Interface.on_connection/2`, and calls `Published.put/1` after each
+update.
 
 The non-process modules:
 
