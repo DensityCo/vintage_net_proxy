@@ -13,7 +13,8 @@ defmodule VintageNetProxy.InterfaceTest do
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection, :disconnected),
       pac_script: Keyword.get(opts, :pac_script),
-      dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url)
+      dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url),
+      dhcp_domain: Keyword.get(opts, :dhcp_domain)
     }
   end
 
@@ -122,6 +123,62 @@ defmodule VintageNetProxy.InterfaceTest do
         )
 
       assert Interface.effective_pac_url(s) == "http://explicit/"
+    end
+
+    test "DNS-WPAD fallback constructs http://wpad.<domain>/wpad.dat from DHCP option 15" do
+      s =
+        iface(
+          intent: %{mode: :auto},
+          connection: :internet,
+          dhcp_domain: "corp.example.com"
+        )
+
+      assert Interface.effective_pac_url(s) == "http://wpad.corp.example.com/wpad.dat"
+    end
+
+    test "DHCP option 252 wpad wins over DNS-WPAD fallback" do
+      s =
+        iface(
+          intent: %{mode: :auto},
+          connection: :internet,
+          dhcp_wpad_url: "http://option252/wpad.dat",
+          dhcp_domain: "corp.example.com"
+        )
+
+      assert Interface.effective_pac_url(s) == "http://option252/wpad.dat"
+    end
+
+    test "explicit pac_url wins over DNS-WPAD fallback" do
+      s =
+        iface(
+          intent: %{mode: :auto, pac_url: "http://explicit/"},
+          connection: :internet,
+          dhcp_domain: "corp.example.com"
+        )
+
+      assert Interface.effective_pac_url(s) == "http://explicit/"
+    end
+
+    test "no DNS-WPAD when intent isn't :auto" do
+      s =
+        iface(
+          intent: %{mode: :direct},
+          connection: :internet,
+          dhcp_domain: "corp.example.com"
+        )
+
+      assert Interface.effective_pac_url(s) == nil
+    end
+
+    test "no DNS-WPAD when domain is malformed (rejected by Wpad)" do
+      s =
+        iface(
+          intent: %{mode: :auto},
+          connection: :internet,
+          dhcp_domain: "http://evil.com/path"
+        )
+
+      assert Interface.effective_pac_url(s) == nil
     end
   end
 

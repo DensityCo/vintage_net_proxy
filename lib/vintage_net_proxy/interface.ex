@@ -14,13 +14,14 @@ defmodule VintageNetProxy.Interface do
 
   require Logger
 
-  alias VintageNetProxy.{Config, Fetcher, PAC}
+  alias VintageNetProxy.{Config, Fetcher, PAC, Wpad}
 
   @up_states [:internet, :lan]
 
   defstruct iface: nil,
             intent: nil,
             dhcp_wpad_url: nil,
+            dhcp_domain: nil,
             pac_script: nil,
             connection: nil
 
@@ -28,6 +29,7 @@ defmodule VintageNetProxy.Interface do
           iface: String.t() | nil,
           intent: map() | nil,
           dhcp_wpad_url: String.t() | nil,
+          dhcp_domain: String.t() | nil,
           pac_script: String.t() | nil,
           connection: atom() | nil
         }
@@ -70,6 +72,9 @@ defmodule VintageNetProxy.Interface do
   def effective_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
     do: url
 
+  def effective_pac_url(%{intent: %{mode: :auto}, dhcp_domain: domain}) when is_binary(domain),
+    do: Wpad.dns_url(domain)
+
   def effective_pac_url(_), do: nil
 
   @doc "True iff this interface has an intent and is connected enough to serve it."
@@ -106,6 +111,7 @@ defmodule VintageNetProxy.Interface do
       connection: state.connection,
       pac_loaded?: not is_nil(state.pac_script),
       dhcp_wpad_url: state.dhcp_wpad_url,
+      dhcp_domain: state.dhcp_domain,
       pac_url: configured_pac_url(state)
     }
   end
@@ -226,16 +232,34 @@ defmodule VintageNetProxy.Interface do
 
   defp put_intent(state, _), do: %{state | intent: nil}
 
-  defp put_dhcp_options(state, %{wpad: url}) when is_binary(url) and url != "",
-    do: %{state | dhcp_wpad_url: url}
+  # Pulls both DHCP option 252 (`:wpad`) and option 15 (`:domain`) out of
+  # `dhcp_options`. Either is sufficient for `:auto` mode to find a PAC
+  # URL; option 252 wins via the priority order in `effective_pac_url/1`.
+  defp put_dhcp_options(state, opts) when is_map(opts) do
+    %{
+      state
+      | dhcp_wpad_url: extract_wpad(opts),
+        dhcp_domain: extract_domain(opts)
+    }
+  end
 
-  defp put_dhcp_options(state, _), do: %{state | dhcp_wpad_url: nil}
+  defp put_dhcp_options(state, _),
+    do: %{state | dhcp_wpad_url: nil, dhcp_domain: nil}
+
+  defp extract_wpad(%{wpad: url}) when is_binary(url) and url != "", do: url
+  defp extract_wpad(_), do: nil
+
+  defp extract_domain(%{domain: d}) when is_binary(d) and d != "", do: d
+  defp extract_domain(_), do: nil
 
   defp configured_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
     do: url
 
   defp configured_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
     do: url
+
+  defp configured_pac_url(%{intent: %{mode: :auto}, dhcp_domain: domain}) when is_binary(domain),
+    do: Wpad.dns_url(domain)
 
   defp configured_pac_url(_), do: nil
 end

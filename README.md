@@ -303,14 +303,31 @@ URL, so subscribing to `["proxy", "config"]` is enough. Embedded devices
 that talk to a single known upstream can also just call `resolve/1`
 once with that URL and use the result.
 
-## DHCP Option 252 wiring
+## WPAD discovery
 
-Each `Interface` subscribes to `["interface", iface, "dhcp_options"]`
-and extracts the `:wpad` field (DHCP Option 252) when present. Anything
-that writes `dhcp_options` to that property — typically VintageNet's
-own udhcpc handler — triggers a PAC fetch and re-publish, provided the
-interface config has `proxy: %{mode: :auto}` (without an explicit
-`pac_url`) and the interface's `connection` is `:internet` or `:lan`.
+For `:auto` proxy intent with no explicit `:pac_url`, the library tries
+two discovery paths in order, both driven off the
+`["interface", iface, "dhcp_options"]` property that VintageNet's
+udhcpc handler populates from each lease:
+
+1. **DHCP Option 252 (`wpad`)** — if the lease included a WPAD URL
+   directly, that's what gets fetched. This is the modern path and what
+   most corporate WPAD-aware DHCP servers advertise.
+2. **DNS-WPAD fallback** — if option 252 wasn't present but DHCP option
+   15 (`domain`) was, the library constructs
+   `http://wpad.<domain>/wpad.dat` and fetches that. This is the
+   classic WPAD discovery path used by networks that publish PAC via
+   DNS only.
+
+Either signal triggers a PAC fetch and re-publish, provided the
+interface's `connection` is `:internet` or `:lan`. An explicit
+`pac_url` in the proxy config wins over both DHCP-derived paths.
+
+The DNS-WPAD step deliberately does **not** walk up the DNS hierarchy
+(`wpad.eng.corp.example` → `wpad.corp.example` → ...). It constructs
+exactly one URL from the exact DHCP-supplied domain. Walking up is a
+known WPAD spoofing vector and is not implemented; if a deployment
+needs multiple-domain discovery, set `:pac_url` explicitly.
 
 ## PAC subset
 

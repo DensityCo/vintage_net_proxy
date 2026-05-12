@@ -77,7 +77,14 @@ defmodule VintageNetProxy.Roster do
         case Map.get(state.states, iface) do
           nil ->
             {iface,
-             %{intent: nil, connection: nil, dhcp_wpad_url: nil, pac_url: nil, pac_loaded?: false}}
+             %{
+               intent: nil,
+               connection: nil,
+               dhcp_wpad_url: nil,
+               dhcp_domain: nil,
+               pac_url: nil,
+               pac_loaded?: false
+             }}
 
           s ->
             snap = Interface.snapshot(s)
@@ -87,6 +94,7 @@ defmodule VintageNetProxy.Roster do
                intent: snap.intent,
                connection: snap.connection,
                dhcp_wpad_url: snap.dhcp_wpad_url,
+               dhcp_domain: snap.dhcp_domain,
                pac_url: snap.pac_url,
                pac_loaded?: snap.pac_loaded?
              }}
