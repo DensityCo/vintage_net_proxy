@@ -282,16 +282,31 @@ Interface processes, or the published proxy value, and vice versa.
 
 ### Triggers
 
-Probes fire on three triggers:
+Probes fire on four triggers:
 
   1. Startup (after a configurable `:initial_delay`, default 1s).
   2. Every `:interval` milliseconds.
   3. Whenever the published proxy at `["proxy", "config"]` changes —
      a different proxy means the previous probe result no longer
      describes the current path, so a fresh probe is run immediately.
+  4. Whenever `["proxy", "pac_revision"]` ticks — the Selector fires
+     this when an active interface's PAC script changes in place
+     (same effective URL, new body). The `config` property can't
+     distinguish that case (both before and after publish `:auto`),
+     but the rules for what flows through the proxy may have
+     changed, so a fresh probe is run.
 
 You can also force an immediate probe synchronously via
 `VintageNetProxy.check_connectivity/0`, which returns the new result.
+
+#### `pac_revision`
+
+`["proxy", "pac_revision"]` carries a monotonic value that increments
+whenever the active interface's PAC script body changes without the
+effective URL changing. It exists so the connectivity checker can
+re-probe on PAC reloads that the `config` property can't observe; the
+value itself carries no meaning beyond "something changed" and is not
+part of the consumer-facing contract.
 
 ## Architecture
 

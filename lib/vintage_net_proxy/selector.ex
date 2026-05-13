@@ -38,10 +38,24 @@ defmodule VintageNetProxy.Selector do
 
   @impl true
   def handle_info({:interface_changed, iface, state}, roster) do
+    old_state = Map.get(roster.states, iface)
     new_roster = Roster.put_iface(roster, iface, state)
     Publisher.put(Roster.value(new_roster))
+    if pac_reloaded_in_place?(old_state, state), do: Publisher.bump_pac_revision()
     {:noreply, new_roster}
   end
 
   def handle_info(_msg, roster), do: {:noreply, roster}
+
+  # Fires only when the PAC script content changes from one non-nil
+  # value to a different non-nil value — the narrow case the
+  # `config` property can't distinguish (both states publish `:auto`).
+  # nil → non-nil and non-nil → nil transitions show up via the
+  # `config` property going `:unset` ↔ `:auto`, so we deliberately
+  # don't fire here for those.
+  defp pac_reloaded_in_place?(%{pac_script: old}, %{pac_script: new})
+       when is_binary(old) and is_binary(new) and old != new,
+       do: true
+
+  defp pac_reloaded_in_place?(_, _), do: false
 end
