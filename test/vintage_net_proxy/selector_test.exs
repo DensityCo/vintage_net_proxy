@@ -16,7 +16,10 @@ defmodule VintageNetProxy.SelectorTest do
 
     start_supervised!({Selector, interfaces: [primary, secondary]})
 
-    on_exit(fn -> PropertyTable.delete(VintageNet, ["proxy", "config"]) end)
+    on_exit(fn ->
+      PropertyTable.delete(VintageNet, ["proxy", "config"])
+      PropertyTable.delete(VintageNet, ["proxy", "pac_revision"])
+    end)
 
     {:ok, primary: primary, secondary: secondary}
   end
@@ -143,6 +146,51 @@ defmodule VintageNetProxy.SelectorTest do
     test "are ignored without crashing the Selector" do
       send(Selector, :garbage)
       assert is_map(Selector.status())
+    end
+  end
+
+  describe "pac_revision tick" do
+    test "fires when an active iface's pac_script changes in place",
+         %{primary: iface} do
+      VintageNet.subscribe(Publisher.pac_revision_property())
+
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "OLD")
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "NEW")
+
+      assert_receive {VintageNet, ["proxy", "pac_revision"], _, _, _}, 1_000
+    end
+
+    test "does not fire on initial nil → script transition (config event covers it)",
+         %{primary: iface} do
+      VintageNet.subscribe(Publisher.pac_revision_property())
+
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "ONLY")
+
+      refute_receive {VintageNet, ["proxy", "pac_revision"], _, _, _}, 200
+    end
+
+    test "does not fire when pac_script is cleared (script → nil)",
+         %{primary: iface} do
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "X")
+
+      VintageNet.subscribe(Publisher.pac_revision_property())
+
+      # Script cleared (e.g. disconnect path): config goes :auto → :unset,
+      # which the config-property event already covers — no extra tick.
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: nil)
+
+      refute_receive {VintageNet, ["proxy", "pac_revision"], _, _, _}, 200
+    end
+
+    test "does not fire when the same script is republished",
+         %{primary: iface} do
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "X")
+
+      VintageNet.subscribe(Publisher.pac_revision_property())
+
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "X")
+
+      refute_receive {VintageNet, ["proxy", "pac_revision"], _, _, _}, 200
     end
   end
 end

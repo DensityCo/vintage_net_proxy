@@ -61,9 +61,20 @@ defmodule VintageNetProxy.Connectivity do
   a *sibling* of the main supervision tree. A crash here does not
   perturb the Selector, Interface processes, or the published proxy
   value, and vice versa. The only coupling is read-side: the checker
-  subscribes to `["proxy", "config"]` to re-probe when the resolved
-  proxy flips, and calls `VintageNetProxy.resolve/1` when that value is
-  `:auto`. It writes only `["proxy", "connectivity"]`.
+  subscribes to `["proxy", "config"]` and `["proxy", "pac_revision"]`
+  to re-probe when the resolved proxy flips or its PAC reloads
+  in-place, and calls `VintageNetProxy.resolve/1` when the published
+  value is `:auto`. It writes only `["proxy", "connectivity"]`.
+
+  ## Re-probe triggers
+
+    1. Startup (after `:initial_delay`).
+    2. Every `:interval` ms.
+    3. `["proxy", "config"]` changes — different proxy model.
+    4. `["proxy", "pac_revision"]` ticks — same PAC URL, new script
+       body. The `config` property can't distinguish this case
+       (both states publish `:auto`), so the Selector emits a separate
+       tick on in-place reloads.
   """
   use GenServer
 
@@ -139,6 +150,7 @@ defmodule VintageNetProxy.Connectivity do
 
     publish(:unknown)
     VintageNet.subscribe(Publisher.property())
+    VintageNet.subscribe(Publisher.pac_revision_property())
 
     state = %__MODULE__{
       probe_url: probe_url,
@@ -168,6 +180,14 @@ defmodule VintageNetProxy.Connectivity do
   end
 
   def handle_info({VintageNet, ["proxy", "config"], _old, _new, _meta}, state) do
+    cancel(state.timer)
+    {:noreply, %{state | timer: arm(0)}}
+  end
+
+  # In-place PAC reload (same effective URL, new body): the `config`
+  # property stayed `:auto` so the previous clause never fires, but the
+  # rules for what flows through the proxy may have changed. Probe again.
+  def handle_info({VintageNet, ["proxy", "pac_revision"], _old, _new, _meta}, state) do
     cancel(state.timer)
     {:noreply, %{state | timer: arm(0)}}
   end

@@ -1,15 +1,17 @@
 defmodule VintageNetProxy.ConnectivityTest do
   use ExUnit.Case, async: false
 
-  alias VintageNetProxy.Connectivity
+  alias VintageNetProxy.{Connectivity, Publisher}
 
   @config_property ["proxy", "config"]
   @connectivity_property ["proxy", "connectivity"]
+  @pac_revision_property ["proxy", "pac_revision"]
 
   setup do
     on_exit(fn ->
       PropertyTable.delete(VintageNet, @config_property)
       PropertyTable.delete(VintageNet, @connectivity_property)
+      PropertyTable.delete(VintageNet, @pac_revision_property)
     end)
 
     :ok
@@ -77,6 +79,24 @@ defmodule VintageNetProxy.ConnectivityTest do
       # Same listener stays open; switching the published proxy should
       # drive a fresh probe at delay 0.
       PropertyTable.put(VintageNet, @config_property, :direct)
+
+      assert_receive {:accepted, 2}, 5_000
+    end
+  end
+
+  describe "re-probe on pac_revision tick" do
+    test "a tick on [\"proxy\", \"pac_revision\"] triggers a fresh probe" do
+      parent = self()
+      port = accepting_target(parent)
+
+      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      assert Connectivity.check_now() == :ok
+      assert_receive {:accepted, 1}, 5_000
+
+      # An in-place PAC reload bumps pac_revision. The config property
+      # is unchanged (still :auto / :unset / whatever), so this is the
+      # only signal the connectivity checker has to react to.
+      Publisher.bump_pac_revision()
 
       assert_receive {:accepted, 2}, 5_000
     end
