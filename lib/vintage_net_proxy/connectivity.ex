@@ -43,13 +43,24 @@ defmodule VintageNetProxy.Connectivity do
 
       config :vintage_net_proxy,
         connectivity: [
-          probe_url: "https://connectivitycheck.gstatic.com/generate_204",
+          probe_urls: [
+            "https://connectivitycheck.gstatic.com/generate_204",
+            "https://detectportal.firefox.com/success.txt",
+            "https://www.msftncsi.com/ncsi.txt"
+          ],
           interval: 60_000
         ]
 
-  Both keys are optional. Defaults are shown above; the initial probe is
-  delayed by `:initial_delay` (default 1 second) so the supervision tree
-  has time to settle before the first network attempt.
+  `probe_urls` is a list, tried in order. The first one that succeeds
+  wins — under normal operation only the first URL is probed, so a
+  multi-URL list doesn't add traffic. The fallbacks only fire when an
+  earlier probe target is itself broken (vendor outage, per-host
+  filtering on the proxy), keeping a transient probe-target failure
+  from being read as "the proxy is down."
+
+  All keys are optional. The initial probe is delayed by
+  `:initial_delay` (default 1 second) so the supervision tree has time
+  to settle before the first network attempt.
 
   Set `connectivity: false` (or omit it) to leave the checker off — in
   that case this module is not started and the library behaves exactly
@@ -82,11 +93,15 @@ defmodule VintageNetProxy.Connectivity do
   alias VintageNetProxy.Publisher
 
   @property ["proxy", "connectivity"]
-  @default_probe_url "https://connectivitycheck.gstatic.com/generate_204"
+  @default_probe_urls [
+    "https://connectivitycheck.gstatic.com/generate_204",
+    "https://detectportal.firefox.com/success.txt",
+    "https://www.msftncsi.com/ncsi.txt"
+  ]
   @default_interval 60_000
   @default_initial_delay 1_000
 
-  defstruct probe_url: nil,
+  defstruct probe_urls: [],
             interval: nil,
             status: :unknown,
             timer: nil
@@ -120,22 +135,22 @@ defmodule VintageNetProxy.Connectivity do
   def check_now do
     case Process.whereis(__MODULE__) do
       nil -> :unknown
-      _pid -> GenServer.call(__MODULE__, :probe_now, 10_000)
+      _pid -> GenServer.call(__MODULE__, :probe_now, 30_000)
     end
   end
 
   @doc """
-  Introspection snapshot — the current status, configured probe URL,
+  Introspection snapshot — the current status, configured probe URLs,
   and interval.
   """
   @spec status() :: %{
           status: status(),
-          probe_url: String.t() | nil,
+          probe_urls: [String.t()],
           interval: pos_integer() | nil
         }
   def status do
     case Process.whereis(__MODULE__) do
-      nil -> %{status: :unknown, probe_url: nil, interval: nil}
+      nil -> %{status: :unknown, probe_urls: [], interval: nil}
       _pid -> GenServer.call(__MODULE__, :status)
     end
   end
@@ -148,7 +163,7 @@ defmodule VintageNetProxy.Connectivity do
 
   @impl true
   def init(opts) do
-    probe_url = Keyword.get(opts, :probe_url, @default_probe_url)
+    probe_urls = Keyword.get(opts, :probe_urls, @default_probe_urls)
     interval = Keyword.get(opts, :interval, @default_interval)
     initial_delay = Keyword.get(opts, :initial_delay, @default_initial_delay)
 
@@ -157,7 +172,7 @@ defmodule VintageNetProxy.Connectivity do
     VintageNet.subscribe(Publisher.pac_revision_property())
 
     state = %__MODULE__{
-      probe_url: probe_url,
+      probe_urls: probe_urls,
       interval: interval,
       timer: arm(initial_delay)
     }
@@ -173,7 +188,7 @@ defmodule VintageNetProxy.Connectivity do
   end
 
   def handle_call(:status, _from, state) do
-    snap = %{status: state.status, probe_url: state.probe_url, interval: state.interval}
+    snap = %{status: state.status, probe_urls: state.probe_urls, interval: state.interval}
     {:reply, snap, state}
   end
 
@@ -201,9 +216,20 @@ defmodule VintageNetProxy.Connectivity do
   # --- Internals ---
 
   defp probe(state) do
-    decision = decide(state.probe_url)
-    result = Probe.run(state.probe_url, decision)
-    set_status(state, result)
+    set_status(state, run_probes(state.probe_urls))
+  end
+
+  # Try each URL in order, halt on the first `:ok`. If all fail, return
+  # the most recent error so logs include a concrete failure reason.
+  defp run_probes([]), do: {:error, :no_probe_urls_configured}
+
+  defp run_probes(urls) do
+    Enum.reduce_while(urls, {:error, :no_probes_attempted}, fn url, _last ->
+      case Probe.run(url, decide(url)) do
+        :ok -> {:halt, :ok}
+        {:error, _} = err -> {:cont, err}
+      end
+    end)
   end
 
   # Translate the published proxy model into a concrete decision Probe

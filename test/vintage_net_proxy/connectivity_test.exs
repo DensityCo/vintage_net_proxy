@@ -32,7 +32,7 @@ defmodule VintageNetProxy.ConnectivityTest do
     end
 
     test "status/0 returns a default shape when the checker isn't running" do
-      assert Connectivity.status() == %{status: :unknown, probe_url: nil, interval: nil}
+      assert Connectivity.status() == %{status: :unknown, probe_urls: [], interval: nil}
     end
   end
 
@@ -41,7 +41,7 @@ defmodule VintageNetProxy.ConnectivityTest do
       port = accepting_target()
 
       VintageNet.subscribe(@connectivity_property)
-      start_checker(probe_url: "http://127.0.0.1:#{port}/")
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"])
 
       assert_receive {VintageNet, @connectivity_property, _, :ok, _}, 5_000
       assert VintageNetProxy.connectivity() == :ok
@@ -50,9 +50,59 @@ defmodule VintageNetProxy.ConnectivityTest do
     test "publishes {:error, reason} when the target is unreachable" do
       VintageNet.subscribe(@connectivity_property)
       # 127.0.0.1:1 should be guaranteed unbound.
-      start_checker(probe_url: "http://127.0.0.1:1/")
+      start_checker(probe_urls: ["http://127.0.0.1:1/"])
 
       assert_receive {VintageNet, @connectivity_property, _, {:error, _}, _}, 5_000
+    end
+  end
+
+  describe "probe_urls fallback" do
+    test "falls back to the next URL when an earlier one fails" do
+      port = accepting_target()
+
+      start_checker(
+        probe_urls: [
+          "http://127.0.0.1:1/",
+          "http://127.0.0.1:#{port}/"
+        ],
+        initial_delay: 60_000
+      )
+
+      assert Connectivity.check_now() == :ok
+    end
+
+    test "stops at the first :ok — later URLs are not probed" do
+      parent = self()
+      port = accepting_target(parent)
+
+      start_checker(
+        probe_urls: [
+          "http://127.0.0.1:#{port}/",
+          # If this one were tried, the test would hang on the
+          # listener — but it shouldn't be reached.
+          "http://127.0.0.1:#{port}/"
+        ],
+        initial_delay: 60_000
+      )
+
+      assert Connectivity.check_now() == :ok
+      assert_receive {:accepted, 1}, 5_000
+      refute_receive {:accepted, 2}, 200
+    end
+
+    test "returns the last error when every probe URL fails" do
+      start_checker(
+        probe_urls: ["http://127.0.0.1:1/", "http://127.0.0.1:2/"],
+        initial_delay: 60_000
+      )
+
+      assert {:error, _} = Connectivity.check_now()
+    end
+
+    test "empty probe_urls list returns :no_probe_urls_configured" do
+      start_checker(probe_urls: [], initial_delay: 60_000)
+
+      assert Connectivity.check_now() == {:error, :no_probe_urls_configured}
     end
   end
 
@@ -60,7 +110,7 @@ defmodule VintageNetProxy.ConnectivityTest do
     test "returns the probe result and updates the property" do
       port = accepting_target()
       # Long initial_delay so the auto-fire doesn't race with our manual call.
-      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == :ok
       assert VintageNet.get(@connectivity_property) == :ok
@@ -72,7 +122,7 @@ defmodule VintageNetProxy.ConnectivityTest do
       parent = self()
       port = accepting_target(parent)
 
-      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
       assert Connectivity.check_now() == :ok
       assert_receive {:accepted, 1}, 5_000
 
@@ -89,7 +139,7 @@ defmodule VintageNetProxy.ConnectivityTest do
       parent = self()
       port = accepting_target(parent)
 
-      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
       assert Connectivity.check_now() == :ok
       assert_receive {:accepted, 1}, 5_000
 
@@ -106,7 +156,7 @@ defmodule VintageNetProxy.ConnectivityTest do
     test ":unset → direct probe" do
       port = accepting_target()
       PropertyTable.put(VintageNet, @config_property, :unset)
-      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == :ok
     end
@@ -114,7 +164,7 @@ defmodule VintageNetProxy.ConnectivityTest do
     test ":direct → direct probe" do
       port = accepting_target()
       PropertyTable.put(VintageNet, @config_property, :direct)
-      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == :ok
     end
@@ -124,7 +174,7 @@ defmodule VintageNetProxy.ConnectivityTest do
       descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
       PropertyTable.put(VintageNet, @config_property, descriptor)
 
-      start_checker(probe_url: "https://target.test/", initial_delay: 60_000)
+      start_checker(probe_urls: ["https://target.test/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == :ok
     end
@@ -133,7 +183,7 @@ defmodule VintageNetProxy.ConnectivityTest do
       descriptor = %{scheme: :socks5, host: "127.0.0.1", port: 1080}
       PropertyTable.put(VintageNet, @config_property, descriptor)
 
-      start_checker(probe_url: "https://target.test/", initial_delay: 60_000)
+      start_checker(probe_urls: ["https://target.test/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == {:error, :socks_not_supported}
     end
