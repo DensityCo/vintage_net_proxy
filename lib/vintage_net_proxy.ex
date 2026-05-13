@@ -85,7 +85,7 @@ defmodule VintageNetProxy do
   supplied URL.
   """
 
-  alias VintageNetProxy.{Publisher, Selector}
+  alias VintageNetProxy.{Connectivity, Publisher, Selector}
 
   @type scheme :: :http | :https | :socks4 | :socks5
 
@@ -103,6 +103,12 @@ defmodule VintageNetProxy do
 
   @type proxy :: :unset | :direct | :auto | proxy_descriptor()
   @type resolved :: :direct | proxy_descriptor()
+
+  @typedoc """
+  Connectivity check result. `:unknown` until the first probe completes
+  (or always, if the connectivity checker isn't running).
+  """
+  @type connectivity :: :unknown | :ok | {:error, term()}
 
   @doc "Property table key under which the resolved proxy is published."
   @spec property() :: [String.t()]
@@ -144,4 +150,34 @@ defmodule VintageNetProxy do
   """
   @spec resolve(String.t()) :: resolved()
   def resolve(url) when is_binary(url), do: Selector.resolve(url)
+
+  @doc """
+  Property table key under which the connectivity check result is
+  published. See `VintageNetProxy.Connectivity` for details.
+  """
+  @spec connectivity_property() :: [String.t()]
+  def connectivity_property, do: Connectivity.property()
+
+  @doc "Subscribe to connectivity state changes."
+  @spec subscribe_connectivity() :: :ok
+  def subscribe_connectivity, do: Connectivity.subscribe()
+
+  @doc "Unsubscribe from connectivity state changes."
+  @spec unsubscribe_connectivity() :: :ok
+  def unsubscribe_connectivity, do: Connectivity.unsubscribe()
+
+  @doc """
+  Current connectivity state — `:unknown` if no probe has run yet (or
+  the connectivity checker isn't enabled), `:ok` if the most recent
+  probe succeeded, `{:error, reason}` if it failed.
+  """
+  @spec connectivity() :: connectivity()
+  def connectivity, do: Connectivity.get()
+
+  @doc """
+  Run a connectivity probe right now and return its result. Returns
+  `:unknown` if the connectivity checker isn't running.
+  """
+  @spec check_connectivity() :: connectivity()
+  def check_connectivity, do: Connectivity.check_now()
 end
