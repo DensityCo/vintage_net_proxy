@@ -128,7 +128,11 @@ defmodule VintageNetProxy.Connectivity do
   Introspection snapshot — the current status, configured probe URL,
   and interval.
   """
-  @spec status() :: %{status: status(), probe_url: String.t() | nil, interval: pos_integer() | nil}
+  @spec status() :: %{
+          status: status(),
+          probe_url: String.t() | nil,
+          interval: pos_integer() | nil
+        }
   def status do
     case Process.whereis(__MODULE__) do
       nil -> %{status: :unknown, probe_url: nil, interval: nil}
