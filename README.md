@@ -1,4 +1,4 @@
-# vintage_net_proxy
+# VintageNetProxy
 
 Resolve a system HTTP proxy from a per-interface `:proxy` configuration
 field (optionally combined with DHCP Option 252 / WPAD discovery), and
@@ -8,6 +8,39 @@ expose the result via the
 Designed to replace polling + file-based IPC + service-restart
 architectures (PACrunner, D-Bus, etc.) with event-driven property
 subscriptions.
+
+## Installation
+
+Add `vintage_net_proxy` to the deps in your `mix.exs`. The library is
+not yet on Hex, so depend on it via Git:
+
+```elixir
+def deps do
+  [
+    {:vintage_net, "~> 0.13"},
+    {:vintage_net_proxy, github: "DensityCo/vintage_net_proxy"}
+  ]
+end
+```
+
+Requires Elixir `~> 1.15` and OTP 26 or newer. CI verifies the matrix
+1.15-1.19 against OTP 26-28.
+
+Tell the library which interfaces to track, in priority order. The
+list usually matches whatever you've passed to `VintageNet.configure/3`
+on each interface:
+
+```elixir
+# config/config.exs
+config :vintage_net_proxy, interfaces: ["eth0", "wlan0"]
+```
+
+The Application starts a supervision tree (`VintageNetProxy.Supervisor`)
+that subscribes to each listed interface's `config`, `dhcp_options`,
+and `connection` properties and publishes the resolved proxy at
+`["proxy", "config"]`. Nothing else is required to bring it up — set
+the `:proxy` field via `VintageNet.configure/3` and the library
+reacts.
 
 ## Property surface
 
