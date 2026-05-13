@@ -202,6 +202,27 @@ reclaims. Each interface's PAC script is cached only while that
 interface is up — disconnecting drops the script so a reconnect
 re-fetches against the (possibly new) network.
 
+### Why `:lan` counts as eligible
+
+VintageNet classifies an interface's `connection` as
+`:disconnected | :lan | :internet`. `:internet` means VintageNet's
+own probe (a direct TCP/ICMP check to a configured target like
+`1.1.1.1`) succeeded; `:lan` means the link and the IP are up but
+that direct probe failed.
+
+On a corporate WPAD network those direct probes are exactly what the
+firewall blocks — outbound only works through the proxy — so
+VintageNet will park the interface at `:lan` indefinitely. If we
+gated proxy publication on `:internet`, the proxy would never get
+published on the very networks it's designed for. So this library
+treats `:lan` and `:internet` equivalently for proxy resolution:
+either is enough to fetch a LAN-hosted PAC and publish the resolved
+proxy.
+
+The connectivity checker (see below) is the authoritative "outbound
+traffic works" signal — it routes through the resolved proxy and
+answers a different question than VintageNet's `:internet` flag.
+
 ## Connectivity checker
 
 VintageNet already publishes a per-interface `connection` property
