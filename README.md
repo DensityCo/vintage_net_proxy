@@ -262,13 +262,23 @@ keyword list to the library's app environment:
 ```elixir
 config :vintage_net_proxy,
   connectivity: [
-    probe_url: "https://connectivitycheck.gstatic.com/generate_204",
+    probe_urls: [
+      "https://connectivitycheck.gstatic.com/generate_204",
+      "https://detectportal.firefox.com/success.txt",
+      "https://www.msftncsi.com/ncsi.txt"
+    ],
     interval: 60_000
   ]
 ```
 
-`probe_url` is the target the probe attempts to reach; `interval` is
-the milliseconds between automatic probes (defaults to 60s). Set
+`probe_urls` is a list tried in order, halting on the first success;
+`interval` is the milliseconds between automatic probes (defaults to
+60s). Under normal operation only the first URL is probed — the
+fallbacks only fire when an earlier target itself is broken (vendor
+outage, per-host filtering on the proxy), so a multi-URL list adds no
+fleet traffic at steady state. The defaults are three well-known
+captive-portal probe endpoints across different administrative
+domains, so a single-vendor outage doesn't take everyone down. Set
 `connectivity: false` (or omit it) to leave the checker off.
 
 ### How the probe works
