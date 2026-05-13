@@ -93,6 +93,8 @@ defmodule VintageNetProxy.Connectivity do
   alias VintageNetProxy.Publisher
 
   @property ["proxy", "connectivity"]
+  @config_path ["proxy", "config"]
+  @pac_revision_path ["proxy", "pac_revision"]
   @default_probe_urls [
     "https://connectivitycheck.gstatic.com/generate_204",
     "https://detectportal.firefox.com/success.txt",
@@ -168,8 +170,8 @@ defmodule VintageNetProxy.Connectivity do
     initial_delay = Keyword.get(opts, :initial_delay, @default_initial_delay)
 
     publish(:unknown)
-    VintageNet.subscribe(Publisher.property())
-    VintageNet.subscribe(Publisher.pac_revision_property())
+    VintageNet.subscribe(@config_path)
+    VintageNet.subscribe(@pac_revision_path)
 
     state = %__MODULE__{
       probe_urls: probe_urls,
@@ -198,15 +200,12 @@ defmodule VintageNetProxy.Connectivity do
     {:noreply, %{state | timer: arm(state.interval)}}
   end
 
-  def handle_info({VintageNet, ["proxy", "config"], _old, _new, _meta}, state) do
-    cancel(state.timer)
-    {:noreply, %{state | timer: arm(0)}}
-  end
-
-  # In-place PAC reload (same effective URL, new body): the `config`
-  # property stayed `:auto` so the previous clause never fires, but the
-  # rules for what flows through the proxy may have changed. Probe again.
-  def handle_info({VintageNet, ["proxy", "pac_revision"], _old, _new, _meta}, state) do
+  # Both signals — a fresh `config` value and a PAC reload tick — mean
+  # the previous probe result no longer describes reality. Pac_revision
+  # exists specifically because in-place PAC reloads leave `config`
+  # unchanged at `:auto`; see `VintageNetProxy.Publisher` for the why.
+  def handle_info({VintageNet, path, _old, _new, _meta}, state)
+      when path in [@config_path, @pac_revision_path] do
     cancel(state.timer)
     {:noreply, %{state | timer: arm(0)}}
   end
@@ -219,31 +218,28 @@ defmodule VintageNetProxy.Connectivity do
     set_status(state, run_probes(state.probe_urls))
   end
 
-  # Try each URL in order, halt on the first `:ok`. If all fail, return
-  # the most recent error so logs include a concrete failure reason.
+  # Try each URL in order, halt on the first `:ok`. If all fail, the
+  # accumulator carries the most recent error so logs include a concrete
+  # failure reason.
   defp run_probes([]), do: {:error, :no_probe_urls_configured}
 
   defp run_probes(urls) do
-    Enum.reduce_while(urls, {:error, :no_probes_attempted}, fn url, _last ->
-      case Probe.run(url, decide(url)) do
+    proxy = Publisher.get()
+
+    Enum.reduce_while(urls, {:error, :no_probe_urls_configured}, fn url, _last ->
+      case Probe.run(url, decide(proxy, url)) do
         :ok -> {:halt, :ok}
         {:error, _} = err -> {:cont, err}
       end
     end)
   end
 
-  # Translate the published proxy model into a concrete decision Probe
-  # can act on. `:auto` means "PAC is loaded; ask the Selector what the
-  # proxy is for *this* URL"; everything else is already concrete.
-  defp decide(probe_url) do
-    case Publisher.get() do
-      :unset -> :direct
-      :direct -> :direct
-      :auto -> VintageNetProxy.resolve(probe_url)
-      %{} = descriptor -> descriptor
-      _ -> :direct
-    end
-  end
+  # `:auto` means "PAC is loaded; ask the Selector what the proxy is
+  # for *this* URL." Everything else resolves the same regardless of URL.
+  defp decide(:unset, _url), do: :direct
+  defp decide(:direct, _url), do: :direct
+  defp decide(:auto, url), do: VintageNetProxy.resolve(url)
+  defp decide(%{} = descriptor, _url), do: descriptor
 
   defp set_status(%{status: status} = state, status), do: state
 
