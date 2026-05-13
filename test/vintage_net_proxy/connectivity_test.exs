@@ -1,0 +1,178 @@
+defmodule VintageNetProxy.ConnectivityTest do
+  use ExUnit.Case, async: false
+
+  alias VintageNetProxy.Connectivity
+
+  @config_property ["proxy", "config"]
+  @connectivity_property ["proxy", "connectivity"]
+
+  setup do
+    on_exit(fn ->
+      PropertyTable.delete(VintageNet, @config_property)
+      PropertyTable.delete(VintageNet, @connectivity_property)
+    end)
+
+    :ok
+  end
+
+  describe "module API surface" do
+    test "property/0 returns the published key" do
+      assert Connectivity.property() == @connectivity_property
+    end
+
+    test "get/0 returns :unknown before the checker has run" do
+      PropertyTable.delete(VintageNet, @connectivity_property)
+      assert Connectivity.get() == :unknown
+    end
+
+    test "check_now/0 returns :unknown when the checker isn't running" do
+      assert Connectivity.check_now() == :unknown
+    end
+
+    test "status/0 returns a default shape when the checker isn't running" do
+      assert Connectivity.status() == %{status: :unknown, probe_url: nil, interval: nil}
+    end
+  end
+
+  describe "first probe — direct path" do
+    test "publishes :ok against a healthy direct target" do
+      port = accepting_target()
+
+      VintageNet.subscribe(@connectivity_property)
+      start_checker(probe_url: "http://127.0.0.1:#{port}/")
+
+      assert_receive {VintageNet, @connectivity_property, _, :ok, _}, 5_000
+      assert VintageNetProxy.connectivity() == :ok
+    end
+
+    test "publishes {:error, reason} when the target is unreachable" do
+      VintageNet.subscribe(@connectivity_property)
+      # 127.0.0.1:1 should be guaranteed unbound.
+      start_checker(probe_url: "http://127.0.0.1:1/")
+
+      assert_receive {VintageNet, @connectivity_property, _, {:error, _}, _}, 5_000
+    end
+  end
+
+  describe "check_now/0 (synchronous probe)" do
+    test "returns the probe result and updates the property" do
+      port = accepting_target()
+      # Long initial_delay so the auto-fire doesn't race with our manual call.
+      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+
+      assert Connectivity.check_now() == :ok
+      assert VintageNet.get(@connectivity_property) == :ok
+    end
+  end
+
+  describe "re-probe on proxy config change" do
+    test "a change to [\"proxy\", \"config\"] triggers a fresh probe" do
+      parent = self()
+      port = accepting_target(parent)
+
+      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+      assert Connectivity.check_now() == :ok
+      assert_receive {:accepted, 1}, 5_000
+
+      # Same listener stays open; switching the published proxy should
+      # drive a fresh probe at delay 0.
+      PropertyTable.put(VintageNet, @config_property, :direct)
+
+      assert_receive {:accepted, 2}, 5_000
+    end
+  end
+
+  describe "decision derived from the published proxy model" do
+    test ":unset → direct probe" do
+      port = accepting_target()
+      PropertyTable.put(VintageNet, @config_property, :unset)
+      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+
+      assert Connectivity.check_now() == :ok
+    end
+
+    test ":direct → direct probe" do
+      port = accepting_target()
+      PropertyTable.put(VintageNet, @config_property, :direct)
+      start_checker(probe_url: "http://127.0.0.1:#{port}/", initial_delay: 60_000)
+
+      assert Connectivity.check_now() == :ok
+    end
+
+    test "descriptor → CONNECT probe via that proxy" do
+      port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
+      descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+      PropertyTable.put(VintageNet, @config_property, descriptor)
+
+      start_checker(probe_url: "https://target.test/", initial_delay: 60_000)
+
+      assert Connectivity.check_now() == :ok
+    end
+
+    test "descriptor with a SOCKS scheme → :socks_not_supported" do
+      descriptor = %{scheme: :socks5, host: "127.0.0.1", port: 1080}
+      PropertyTable.put(VintageNet, @config_property, descriptor)
+
+      start_checker(probe_url: "https://target.test/", initial_delay: 60_000)
+
+      assert Connectivity.check_now() == {:error, :socks_not_supported}
+    end
+  end
+
+  # --- Helpers ---
+
+  defp start_checker(opts) do
+    opts = Keyword.put_new(opts, :initial_delay, 0)
+    start_supervised!({Connectivity, opts})
+  end
+
+  # Listener that keeps accepting connections, closing each immediately.
+  # If `parent` is given, each accept is reported back as
+  # `{:accepted, n}` so tests can verify the number of probes.
+  defp accepting_target(parent \\ nil) do
+    {:ok, lsock} =
+      :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+
+    {:ok, port} = :inet.port(lsock)
+    on_exit(fn -> :gen_tcp.close(lsock) end)
+
+    spawn_link(fn -> accept_loop(lsock, parent, 1) end)
+    port
+  end
+
+  defp accept_loop(lsock, parent, n) do
+    case :gen_tcp.accept(lsock, 60_000) do
+      {:ok, sock} ->
+        :gen_tcp.close(sock)
+        if parent, do: send(parent, {:accepted, n})
+        accept_loop(lsock, parent, n + 1)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp fake_proxy(response) do
+    {:ok, lsock} =
+      :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+
+    {:ok, port} = :inet.port(lsock)
+    on_exit(fn -> :gen_tcp.close(lsock) end)
+
+    spawn_link(fn -> proxy_loop(lsock, response) end)
+    port
+  end
+
+  defp proxy_loop(lsock, response) do
+    case :gen_tcp.accept(lsock, 60_000) do
+      {:ok, sock} ->
+        _ = :gen_tcp.recv(sock, 0, 5_000)
+        :gen_tcp.send(sock, response)
+        :gen_tcp.close(sock)
+        proxy_loop(lsock, response)
+
+      _ ->
+        :ok
+    end
+  end
+end

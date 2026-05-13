@@ -202,6 +202,97 @@ reclaims. Each interface's PAC script is cached only while that
 interface is up — disconnecting drops the script so a reconnect
 re-fetches against the (possibly new) network.
 
+## Connectivity checker
+
+VintageNet already publishes a per-interface `connection` property
+(`:disconnected | :lan | :internet`) that says whether the interface
+itself has direct internet reachability. On corporate networks that
+discover a proxy via WPAD/PAC, that signal is usually the wrong one to
+gate application traffic on — the interface is healthy and reports
+`:internet`, but the firewall blocks direct egress and the only path
+out is *through the proxy*.
+
+`VintageNetProxy.Connectivity` reports the second signal. It
+periodically probes whether the proxy this library has resolved is
+actually carrying outbound traffic, and publishes the result so other
+parts of the system can subscribe and react:
+
+| Value | Meaning |
+|---|---|
+| `:unknown` | No probe has run yet (or the checker isn't enabled) |
+| `:ok` | The most recent probe succeeded |
+| `{:error, reason}` | The most recent probe failed |
+
+```elixir
+VintageNetProxy.subscribe_connectivity()
+
+def handle_info({VintageNet, ["proxy", "connectivity"], _old, status, _}, s) do
+  case status do
+    :ok          -> {:noreply, mark_online(s)}
+    {:error, _}  -> {:noreply, mark_offline(s)}
+    :unknown     -> {:noreply, s}
+  end
+end
+```
+
+The checker is **off by default**. Enable it by adding a `:connectivity`
+keyword list to the library's app environment:
+
+```elixir
+config :vintage_net_proxy,
+  connectivity: [
+    probe_url: "https://connectivitycheck.gstatic.com/generate_204",
+    interval: 60_000
+  ]
+```
+
+`probe_url` is the target the probe attempts to reach; `interval` is
+the milliseconds between automatic probes (defaults to 60s). Set
+`connectivity: false` (or omit it) to leave the checker off.
+
+### How the probe works
+
+  * For `:direct` (or `:unset`) — TCP-connect to the URL's host and
+    port. A successful connect means the device can reach that target
+    on that port without a proxy.
+  * For an HTTP / HTTPS proxy descriptor — TCP-connect to the proxy
+    and send `CONNECT host:port HTTP/1.1`. A `200` response means the
+    proxy successfully opened the upstream TCP connection on our
+    behalf — i.e. outbound through the proxy is working end-to-end.
+  * For `:auto` — `resolve/1` is called against the probe URL to get a
+    concrete decision, then dispatched as above.
+  * SOCKS proxies are reported as `{:error, :socks_not_supported}`.
+    Supporting them would require a SOCKS client this library
+    deliberately doesn't carry; an explicit error is more useful than
+    a misleading fallback.
+
+The probe is intentionally minimal: no HTTP body, no TLS handshake,
+no captive-portal sniffing. The goal is "did outbound traffic flow,"
+not "is the endpoint healthy" — for the latter, applications already
+know what to check.
+
+### Isolation
+
+The checker is a single GenServer mounted at the Application level as
+a sibling of the main `VintageNetProxy.Supervisor`. It only writes to
+`["proxy", "connectivity"]` and only reads `["proxy", "config"]`
+(via subscription) and `resolve/1` (when the published value is
+`:auto`). A crash in the checker does not perturb the Selector,
+Interface processes, or the published proxy value, and vice versa.
+
+### Triggers
+
+Probes fire on three triggers:
+
+  1. Startup (after a configurable `:initial_delay`, default 1s).
+  2. Every `:interval` milliseconds.
+  3. Whenever the published proxy at `["proxy", "config"]` changes —
+     a different proxy means the previous probe result no longer
+     describes the current path, so a fresh probe is run immediately.
+
+You can also force an immediate probe synchronously via
+`VintageNetProxy.check_connectivity/0`, which returns the new result.
+
 ## Architecture
 
 ```
@@ -309,6 +400,11 @@ debugging or external inspection.
 
   * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP` — the PAC
     script evaluator (see "PAC subset" below).
+
+  * `VintageNetProxy.Connectivity`, `Connectivity.Probe` — the
+    optional connectivity checker; lives outside the main supervision
+    tree so it can't perturb proxy resolution. See "Connectivity
+    checker" above.
 
 ## Persistence
 
