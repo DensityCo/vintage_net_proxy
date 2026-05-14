@@ -72,7 +72,7 @@ defmodule VintageNetProxy.PAC do
 
     matched =
       Enum.find_value(rules, fn {expr, directive} ->
-        if Predicate.eval(expr, host, url), do: directive
+        if Predicate.eval(expr, host: host, url: url), do: directive
       end)
 
     cond do

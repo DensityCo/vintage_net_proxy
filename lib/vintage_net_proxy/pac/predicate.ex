@@ -24,14 +24,30 @@ defmodule VintageNetProxy.PAC.Predicate do
   alias VintageNetProxy.PAC.IP
 
   @doc """
-  Evaluate a predicate expression string against a host (and
-  optionally the URL the host came from, for `shExpMatch(url, …)`).
+  Evaluate a predicate expression against runtime context.
+
+  `opts` is a keyword list of values predicates can read:
+
+    * `:host` — host pulled from the URL (`isPlainHostName`, etc.).
+      Defaults to `""`.
+    * `:url` — the full URL the host came from (`shExpMatch(url, …)`).
+      Defaults to `""`.
+
+  Future context (local IP, DNS resolver, wallclock) slots into the
+  same opts shape; tests pass only the keys they need.
+
+  Parse errors and unsupported atoms evaluate to false.
   """
-  @spec eval(String.t(), String.t(), String.t()) :: boolean()
-  def eval(expr, host, url \\ "") when is_binary(expr) and is_binary(host) and is_binary(url) do
+  @spec eval(String.t(), keyword()) :: boolean()
+  def eval(expr, opts \\ []) when is_binary(expr) and is_list(opts) do
+    ctx = %{
+      host: Keyword.get(opts, :host, ""),
+      url: Keyword.get(opts, :url, "")
+    }
+
     with {:ok, tokens} <- tokenize(expr, []),
          {:ok, ast, []} <- parse_or(tokens) do
-      evaluate(ast, host, url)
+      evaluate(ast, ctx)
     else
       _ -> false
     end
@@ -149,34 +165,34 @@ defmodule VintageNetProxy.PAC.Predicate do
 
   # ---- Evaluator ----
 
-  defp evaluate({:or, l, r}, host, url), do: evaluate(l, host, url) or evaluate(r, host, url)
-  defp evaluate({:and, l, r}, host, url), do: evaluate(l, host, url) and evaluate(r, host, url)
-  defp evaluate({:not, inner}, host, url), do: not evaluate(inner, host, url)
+  defp evaluate({:or, l, r}, ctx), do: evaluate(l, ctx) or evaluate(r, ctx)
+  defp evaluate({:and, l, r}, ctx), do: evaluate(l, ctx) and evaluate(r, ctx)
+  defp evaluate({:not, inner}, ctx), do: not evaluate(inner, ctx)
 
-  defp evaluate({:eq, literal}, host, _url),
+  defp evaluate({:eq, literal}, %{host: host}),
     do: String.downcase(host) == String.downcase(literal)
 
-  defp evaluate({:call, name, args}, host, url), do: call(name, args, host, url)
+  defp evaluate({:call, name, args}, ctx), do: call(name, args, ctx)
 
-  defp call("shExpMatch", [{:ident, "host"}, {:str, pattern}], host, _url),
+  defp call("shExpMatch", [{:ident, "host"}, {:str, pattern}], %{host: host}),
     do: glob_match?(host, pattern)
 
-  defp call("shExpMatch", [{:ident, "url"}, {:str, pattern}], _host, url),
+  defp call("shExpMatch", [{:ident, "url"}, {:str, pattern}], %{url: url}),
     do: glob_match?(url, pattern)
 
-  defp call("dnsDomainIs", [{:ident, "host"}, {:str, suffix}], host, _url),
+  defp call("dnsDomainIs", [{:ident, "host"}, {:str, suffix}], %{host: host}),
     do: String.ends_with?(String.downcase(host), String.downcase(suffix))
 
-  defp call("isPlainHostName", [{:ident, "host"}], host, _url),
+  defp call("isPlainHostName", [{:ident, "host"}], %{host: host}),
     do: not String.contains?(host, ".")
 
-  defp call("localHostOrDomainIs", [{:ident, "host"}, {:str, hostdom}], host, _url),
+  defp call("localHostOrDomainIs", [{:ident, "host"}, {:str, hostdom}], %{host: host}),
     do: local_host_or_domain_is?(host, hostdom)
 
-  defp call("isInNet", [{:ident, "host"}, {:str, net}, {:str, mask}], host, _url),
+  defp call("isInNet", [{:ident, "host"}, {:str, net}, {:str, mask}], %{host: host}),
     do: IP.in_net?(host, net, mask)
 
-  defp call(_, _, _, _), do: false
+  defp call(_, _, _), do: false
 
   defp glob_match?(string, pattern) do
     regex =
