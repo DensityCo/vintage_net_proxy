@@ -20,7 +20,8 @@ defmodule VintageNetProxy.InterfaceTest do
       pac_script: Keyword.get(opts, :pac_script),
       pac_fetch_error: Keyword.get(opts, :pac_fetch_error),
       dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url),
-      dhcp_domain: Keyword.get(opts, :dhcp_domain)
+      dhcp_domain: Keyword.get(opts, :dhcp_domain),
+      local_ip: Keyword.get(opts, :local_ip)
     }
   end
 
@@ -288,6 +289,48 @@ defmodule VintageNetProxy.InterfaceTest do
       assert snap.pac_fetch_error == :nxdomain
       assert snap.value == {:auto, {:error, :nxdomain}}
       assert snap.pac_loaded? == false
+    end
+
+    test "surfaces local_ip when set" do
+      snap = iface(local_ip: "10.1.2.3") |> Interface.snapshot()
+      assert snap.local_ip == "10.1.2.3"
+    end
+
+    test "local_ip is nil when no IP is available" do
+      snap = iface(intent: %{mode: :auto}) |> Interface.snapshot()
+      assert snap.local_ip == nil
+    end
+  end
+
+  describe "resolve/2 — myIpAddress threading" do
+    @subnet_routing """
+    function FindProxyForURL(url, host) {
+      if (isInNet(myIpAddress(), "10.1.0.0", "255.255.0.0")) return "PROXY site-a:8080";
+      return "PROXY default:8080";
+    }
+    """
+
+    test "local_ip on the matching subnet picks the site-specific proxy" do
+      state =
+        iface(intent: %{mode: :auto}, pac_script: @subnet_routing, local_ip: "10.1.5.10")
+
+      assert Interface.resolve(state, "https://target.example/") ==
+               {:ok, %{scheme: :http, host: "site-a", port: 8080}}
+    end
+
+    test "local_ip off-subnet falls to default" do
+      state =
+        iface(intent: %{mode: :auto}, pac_script: @subnet_routing, local_ip: "192.168.1.5")
+
+      assert Interface.resolve(state, "https://target.example/") ==
+               {:ok, %{scheme: :http, host: "default", port: 8080}}
+    end
+
+    test "no local_ip falls to default (myIpAddress rules don't fire)" do
+      state = iface(intent: %{mode: :auto}, pac_script: @subnet_routing)
+
+      assert Interface.resolve(state, "https://target.example/") ==
+               {:ok, %{scheme: :http, host: "default", port: 8080}}
     end
   end
 end

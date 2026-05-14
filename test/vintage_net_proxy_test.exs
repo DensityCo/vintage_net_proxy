@@ -344,6 +344,51 @@ defmodule VintageNetProxyTest do
       flush(iface)
       assert VintageNetProxy.status().by_interface[iface].pac_loaded? == false
     end
+
+    test "myIpAddress() picks the right proxy based on the device's IP",
+         %{config_property: cprop, iface: iface} do
+      pac = """
+      function FindProxyForURL(url, host) {
+        if (isInNet(myIpAddress(), "10.1.0.0", "255.255.0.0")) return "PROXY site-a:8080";
+        if (isInNet(myIpAddress(), "10.2.0.0", "255.255.0.0")) return "PROXY site-b:8080";
+        return "PROXY default:8080";
+      }
+      """
+
+      port = serve_once(pac)
+
+      addresses_prop = ["interface", iface, "addresses"]
+
+      PropertyTable.put(VintageNet, addresses_prop, [
+        %{family: :inet, address: {10, 1, 5, 10}, prefix_length: 16}
+      ])
+
+      PropertyTable.put(VintageNet, cprop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      flush(iface)
+
+      # Device is on 10.1.x.x → site A.
+      assert VintageNetProxy.resolve("https://target.example/") ==
+               {:ok, %{scheme: :http, host: "site-a", port: 8080}}
+
+      # Move to site B's subnet — resolve re-evaluates against the new IP.
+      PropertyTable.put(VintageNet, addresses_prop, [
+        %{family: :inet, address: {10, 2, 5, 10}, prefix_length: 16}
+      ])
+
+      flush(iface)
+
+      assert VintageNetProxy.resolve("https://target.example/") ==
+               {:ok, %{scheme: :http, host: "site-b", port: 8080}}
+
+      # Status surfaces local_ip for introspection.
+      assert VintageNetProxy.status().by_interface[iface].local_ip == "10.2.5.10"
+
+      on_exit(fn -> PropertyTable.delete(VintageNet, addresses_prop) end)
+    end
   end
 
   describe "multi-interface priority selection" do

@@ -5,59 +5,59 @@ defmodule VintageNetProxy.PAC.PredicateTest do
 
   describe "atom: isPlainHostName" do
     test "no dot → true" do
-      assert Predicate.eval("isPlainHostName(host)", "intranet")
+      assert Predicate.eval("isPlainHostName(host)", host: "intranet")
     end
 
     test "dotted host → false" do
-      refute Predicate.eval("isPlainHostName(host)", "intranet.corp")
+      refute Predicate.eval("isPlainHostName(host)", host: "intranet.corp")
     end
   end
 
   describe "atom: shExpMatch" do
     test "star wildcard" do
-      assert Predicate.eval(~s|shExpMatch(host, "*.corp")|, "api.corp")
-      refute Predicate.eval(~s|shExpMatch(host, "*.corp")|, "api.example")
+      assert Predicate.eval(~s|shExpMatch(host, "*.corp")|, host: "api.corp")
+      refute Predicate.eval(~s|shExpMatch(host, "*.corp")|, host: "api.example")
     end
 
     test "? wildcard matches a single character" do
-      assert Predicate.eval(~s|shExpMatch(host, "h?st")|, "host")
-      refute Predicate.eval(~s|shExpMatch(host, "h?st")|, "hoost")
+      assert Predicate.eval(~s|shExpMatch(host, "h?st")|, host: "host")
+      refute Predicate.eval(~s|shExpMatch(host, "h?st")|, host: "hoost")
     end
 
     test "case-insensitive" do
-      assert Predicate.eval(~s|shExpMatch(host, "*.CORP")|, "api.corp")
+      assert Predicate.eval(~s|shExpMatch(host, "*.CORP")|, host: "api.corp")
     end
 
     test "url variant: matches against the full URL" do
       assert Predicate.eval(
                ~s|shExpMatch(url, "https://*")|,
-               "api.example",
-               "https://api.example/path"
+               host: "api.example",
+               url: "https://api.example/path"
              )
 
       refute Predicate.eval(
                ~s|shExpMatch(url, "https://*")|,
-               "api.example",
-               "http://api.example/path"
+               host: "api.example",
+               url: "http://api.example/path"
              )
     end
 
     test "url variant: glob over path" do
       assert Predicate.eval(
                ~s|shExpMatch(url, "*/admin/*")|,
-               "api.example",
-               "https://api.example/admin/users"
+               host: "api.example",
+               url: "https://api.example/admin/users"
              )
 
       refute Predicate.eval(
                ~s|shExpMatch(url, "*/admin/*")|,
-               "api.example",
-               "https://api.example/public"
+               host: "api.example",
+               url: "https://api.example/public"
              )
     end
 
     test "url variant: when no url is provided, falls through to false" do
-      refute Predicate.eval(~s|shExpMatch(url, "https://*")|, "api.example")
+      refute Predicate.eval(~s|shExpMatch(url, "https://*")|, host: "api.example")
     end
   end
 
@@ -65,28 +65,28 @@ defmodule VintageNetProxy.PAC.PredicateTest do
     test "exact match on the fully-qualified host" do
       assert Predicate.eval(
                ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
-               "intranet.corp.example"
+               host: "intranet.corp.example"
              )
     end
 
     test "unqualified host matches the first segment of the hostdom" do
       assert Predicate.eval(
                ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
-               "intranet"
+               host: "intranet"
              )
     end
 
     test "different unqualified host doesn't match" do
       refute Predicate.eval(
                ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
-               "wiki"
+               host: "wiki"
              )
     end
 
     test "different fully-qualified host doesn't match" do
       refute Predicate.eval(
                ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
-               "home.corp.example"
+               host: "home.corp.example"
              )
     end
 
@@ -94,60 +94,97 @@ defmodule VintageNetProxy.PAC.PredicateTest do
       # `intranet.other.example` is fully qualified and isn't `intranet.corp.example`
       refute Predicate.eval(
                ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
-               "intranet.other.example"
+               host: "intranet.other.example"
              )
     end
 
     test "case-insensitive" do
       assert Predicate.eval(
                ~s|localHostOrDomainIs(host, "Intranet.Corp.Example")|,
-               "INTRANET"
+               host: "INTRANET"
              )
     end
   end
 
   describe "atom: dnsDomainIs" do
     test "matching suffix" do
-      assert Predicate.eval(~s|dnsDomainIs(host, ".corp.example")|, "api.corp.example")
+      assert Predicate.eval(~s|dnsDomainIs(host, ".corp.example")|, host: "api.corp.example")
     end
 
     test "non-matching suffix" do
-      refute Predicate.eval(~s|dnsDomainIs(host, ".corp.example")|, "api.example")
+      refute Predicate.eval(~s|dnsDomainIs(host, ".corp.example")|, host: "api.example")
     end
 
     test "case-insensitive both directions" do
-      assert Predicate.eval(~s|dnsDomainIs(host, ".CORP.example")|, "api.corp.example")
-      assert Predicate.eval(~s|dnsDomainIs(host, ".corp.example")|, "API.CORP.EXAMPLE")
+      assert Predicate.eval(~s|dnsDomainIs(host, ".CORP.example")|, host: "api.corp.example")
+      assert Predicate.eval(~s|dnsDomainIs(host, ".corp.example")|, host: "API.CORP.EXAMPLE")
     end
   end
 
   describe "atom: host equality" do
     test "host == literal" do
-      assert Predicate.eval(~s|host == "localhost"|, "localhost")
-      refute Predicate.eval(~s|host == "localhost"|, "elsewhere")
+      assert Predicate.eval(~s|host == "localhost"|, host: "localhost")
+      refute Predicate.eval(~s|host == "localhost"|, host: "elsewhere")
     end
 
     test "host === literal (strict equality variant)" do
-      assert Predicate.eval(~s|host === "localhost"|, "localhost")
+      assert Predicate.eval(~s|host === "localhost"|, host: "localhost")
     end
 
     test "case-insensitive" do
-      assert Predicate.eval(~s|host == "LocalHost"|, "localhost")
+      assert Predicate.eval(~s|host == "LocalHost"|, host: "localhost")
     end
   end
 
   describe "atom: isInNet" do
     test "IP-literal host inside network" do
-      assert Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, "10.1.2.3")
+      assert Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, host: "10.1.2.3")
     end
 
     test "IP-literal host outside network" do
-      refute Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, "192.168.1.1")
+      refute Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, host: "192.168.1.1")
     end
 
     test "non-literal host returns false" do
-      refute Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, "intranet")
-      refute Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, "api.corp.example")
+      refute Predicate.eval(~s|isInNet(host, "10.0.0.0", "255.0.0.0")|, host: "intranet")
+
+      refute Predicate.eval(
+               ~s|isInNet(host, "10.0.0.0", "255.0.0.0")|,
+               host: "api.corp.example"
+             )
+    end
+  end
+
+  describe "atom: myIpAddress (via isInNet)" do
+    @subnet_a ~s|isInNet(myIpAddress(), "10.1.0.0", "255.255.0.0")|
+
+    test "local_ip inside the network → true" do
+      assert Predicate.eval(@subnet_a, local_ip: "10.1.2.3")
+    end
+
+    test "local_ip outside the network → false" do
+      refute Predicate.eval(@subnet_a, local_ip: "10.2.2.3")
+    end
+
+    test "no local_ip provided → false (falls through)" do
+      refute Predicate.eval(@subnet_a)
+    end
+
+    test "local_ip is nil → false" do
+      refute Predicate.eval(@subnet_a, local_ip: nil)
+    end
+
+    test "myIpAddress composes with || and && over host predicates" do
+      expr = ~s{isPlainHostName(host) || isInNet(myIpAddress(), "10.0.0.0", "255.0.0.0")}
+
+      # Local IP matches → second arm wins.
+      assert Predicate.eval(expr, host: "api.example.com", local_ip: "10.1.2.3")
+
+      # Local IP doesn't match, host is qualified → both arms fail.
+      refute Predicate.eval(expr, host: "api.example.com", local_ip: "192.168.1.1")
+
+      # Plain host wins regardless of local_ip.
+      assert Predicate.eval(expr, host: "intranet", local_ip: "192.168.1.1")
     end
   end
 
@@ -155,41 +192,41 @@ defmodule VintageNetProxy.PAC.PredicateTest do
     test "|| — left match" do
       assert Predicate.eval(
                ~s{isPlainHostName(host) || dnsDomainIs(host, ".corp")},
-               "intranet"
+               host: "intranet"
              )
     end
 
     test "|| — right match" do
       assert Predicate.eval(
                ~s{isPlainHostName(host) || dnsDomainIs(host, ".corp")},
-               "api.corp"
+               host: "api.corp"
              )
     end
 
     test "|| — neither match" do
       refute Predicate.eval(
                ~s{isPlainHostName(host) || dnsDomainIs(host, ".corp")},
-               "api.example"
+               host: "api.example"
              )
     end
 
     test "&& — both match" do
       assert Predicate.eval(
                ~s|dnsDomainIs(host, ".corp") && shExpMatch(host, "api*")|,
-               "api.corp"
+               host: "api.corp"
              )
     end
 
     test "&& — one side fails" do
       refute Predicate.eval(
                ~s|dnsDomainIs(host, ".corp") && shExpMatch(host, "api*")|,
-               "web.corp"
+               host: "web.corp"
              )
     end
 
     test "! negation" do
-      assert Predicate.eval("!isPlainHostName(host)", "foo.example")
-      refute Predicate.eval("!isPlainHostName(host)", "intranet")
+      assert Predicate.eval("!isPlainHostName(host)", host: "foo.example")
+      refute Predicate.eval("!isPlainHostName(host)", host: "intranet")
     end
 
     test "&& binds tighter than ||" do
@@ -198,13 +235,13 @@ defmodule VintageNetProxy.PAC.PredicateTest do
       # C = shExpMatch("web*") = false  →  false || (true && false) = false
       refute Predicate.eval(
                ~s{isPlainHostName(host) || dnsDomainIs(host, ".corp") && shExpMatch(host, "web*")},
-               "api.corp"
+               host: "api.corp"
              )
 
       # Same predicate, C = shExpMatch("api*") = true  →  false || (true && true) = true
       assert Predicate.eval(
                ~s{isPlainHostName(host) || dnsDomainIs(host, ".corp") && shExpMatch(host, "api*")},
-               "api.corp"
+               host: "api.corp"
              )
     end
 
@@ -212,12 +249,12 @@ defmodule VintageNetProxy.PAC.PredicateTest do
       # (A || B) && C — without parens this would be A || (B && C)
       assert Predicate.eval(
                ~s{(isPlainHostName(host) || dnsDomainIs(host, ".corp")) && shExpMatch(host, "api*")},
-               "api.corp"
+               host: "api.corp"
              )
 
       refute Predicate.eval(
                ~s{(isPlainHostName(host) || dnsDomainIs(host, ".corp")) && shExpMatch(host, "api*")},
-               "web.corp"
+               host: "web.corp"
              )
     end
 
@@ -225,10 +262,10 @@ defmodule VintageNetProxy.PAC.PredicateTest do
       expr =
         ~s{isPlainHostName(host) || dnsDomainIs(host, ".corp") || dnsDomainIs(host, ".local")}
 
-      assert Predicate.eval(expr, "x.local")
-      assert Predicate.eval(expr, "api.corp")
-      assert Predicate.eval(expr, "intranet")
-      refute Predicate.eval(expr, "external.example")
+      assert Predicate.eval(expr, host: "x.local")
+      assert Predicate.eval(expr, host: "api.corp")
+      assert Predicate.eval(expr, host: "intranet")
+      refute Predicate.eval(expr, host: "external.example")
     end
   end
 
@@ -236,42 +273,47 @@ defmodule VintageNetProxy.PAC.PredicateTest do
     @expr ~s{isPlainHostName(host) || dnsDomainIs(host, ".mozilla.org") || isInNet(host, "10.0.0.0", "255.0.0.0")}
 
     test "plain hostname bypasses" do
-      assert Predicate.eval(@expr, "intranet")
+      assert Predicate.eval(@expr, host: "intranet")
     end
 
     test "internal domain bypasses" do
-      assert Predicate.eval(@expr, "wiki.mozilla.org")
+      assert Predicate.eval(@expr, host: "wiki.mozilla.org")
     end
 
     test "RFC1918 IP literal bypasses" do
-      assert Predicate.eval(@expr, "10.1.2.3")
+      assert Predicate.eval(@expr, host: "10.1.2.3")
     end
 
     test "external host doesn't match" do
-      refute Predicate.eval(@expr, "github.com")
+      refute Predicate.eval(@expr, host: "github.com")
     end
   end
 
   describe "error handling" do
     test "unsupported atom evaluates to false" do
-      refute Predicate.eval(~s|myIpAddress() == "10.0.0.1"|, "intranet")
+      refute Predicate.eval(~s|dnsResolve(host) == "10.0.0.1"|, host: "intranet")
     end
 
     test "unbalanced parens — falls through to false" do
-      refute Predicate.eval("(isPlainHostName(host)", "intranet")
-      refute Predicate.eval("isPlainHostName(host))", "intranet")
+      refute Predicate.eval("(isPlainHostName(host)", host: "intranet")
+      refute Predicate.eval("isPlainHostName(host))", host: "intranet")
     end
 
     test "garbage — falls through to false" do
-      refute Predicate.eval("$$$", "intranet")
+      refute Predicate.eval("$$$", host: "intranet")
     end
 
     test "empty expression — false" do
-      refute Predicate.eval("", "intranet")
+      refute Predicate.eval("", host: "intranet")
     end
 
     test "trailing tokens after a complete expression — false" do
-      refute Predicate.eval("isPlainHostName(host) extra", "intranet")
+      refute Predicate.eval("isPlainHostName(host) extra", host: "intranet")
+    end
+
+    test "no opts — host/url default to empty string; predicate evaluates without crashing" do
+      # Doesn't match anything meaningful, but doesn't raise either.
+      refute Predicate.eval(~s|host == "intranet"|)
     end
   end
 end

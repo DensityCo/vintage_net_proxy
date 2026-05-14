@@ -10,10 +10,15 @@ defmodule VintageNetProxy.PAC do
   Predicates are evaluated by `VintageNetProxy.PAC.Predicate` and support
   `||`, `&&`, `!`, and parentheses over these atoms:
 
-    * `shExpMatch(host, "<glob>")` — `*` and `?` wildcards
+    * `shExpMatch(host, "<glob>")` / `shExpMatch(url, "<glob>")`
     * `dnsDomainIs(host, ".suffix")` — case-insensitive suffix match
     * `isPlainHostName(host)` — host has no dot
+    * `localHostOrDomainIs(host, "<hostdom>")` — matches the
+      fully-qualified `hostdom`, or `host` when it's the unqualified
+      form of `hostdom`
     * `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
+    * `isInNet(myIpAddress(), "<net>", "<mask>")` — checks the device's
+      own IPv4 (passed in via `:local_ip` on `find_proxy/3`)
     * `host == "<literal>"` / `host === "<literal>"`
 
   Directives supported:
@@ -64,15 +69,32 @@ defmodule VintageNetProxy.PAC do
   @if_re ~r/if\s*\(\s*(.+?)\s*\)\s*\{?\s*return\s*["']([^"']+)["']/us
   @return_re ~r/return\s*["']([^"']+)["']/u
 
-  @spec find_proxy(String.t(), String.t()) :: result()
-  def find_proxy(script, url) when is_binary(script) and is_binary(url) do
+  @doc """
+  Evaluate `script` for the given `url`.
+
+  Options:
+
+    * `:local_ip` — the device's own IPv4 address as a dotted-quad
+      string. Required for PAC scripts that use `myIpAddress()`
+      (typically inside `isInNet(myIpAddress(), …)` for
+      subnet-aware routing). When absent or `nil`, `myIpAddress()`
+      evaluates to "no IP," `isInNet` returns false, and the rule
+      falls through.
+
+  Future context (DNS resolver, wallclock for `weekdayRange`, etc.)
+  will slot into the same opts.
+  """
+  @spec find_proxy(String.t(), String.t(), keyword()) :: result()
+  def find_proxy(script, url, opts \\ [])
+      when is_binary(script) and is_binary(url) and is_list(opts) do
     script = strip_comments(script)
     host = host_from_url(url)
     rules = extract_rules(script)
+    eval_opts = [host: host, url: url] ++ opts
 
     matched =
       Enum.find_value(rules, fn {expr, directive} ->
-        if Predicate.eval(expr, host, url), do: directive
+        if Predicate.eval(expr, eval_opts), do: directive
       end)
 
     cond do
