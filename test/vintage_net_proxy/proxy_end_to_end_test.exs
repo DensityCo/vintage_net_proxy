@@ -83,29 +83,29 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
     end
 
     test "plain hostnames bypass the proxy" do
-      assert VintageNetProxy.resolve("http://intranet/") == :direct
-      assert VintageNetProxy.resolve("http://buildserver/jobs") == :direct
+      assert VintageNetProxy.resolve("http://intranet/") == {:ok, :direct}
+      assert VintageNetProxy.resolve("http://buildserver/jobs") == {:ok, :direct}
     end
 
     test "loopback bypasses" do
-      assert VintageNetProxy.resolve("http://localhost:8080/") == :direct
+      assert VintageNetProxy.resolve("http://localhost:8080/") == {:ok, :direct}
     end
 
     test ".internal and .local domains bypass" do
-      assert VintageNetProxy.resolve("https://wiki.internal/") == :direct
-      assert VintageNetProxy.resolve("https://homepage.local/") == :direct
+      assert VintageNetProxy.resolve("https://wiki.internal/") == {:ok, :direct}
+      assert VintageNetProxy.resolve("https://homepage.local/") == {:ok, :direct}
     end
 
     test "S3 buckets bypass via glob match" do
-      assert VintageNetProxy.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
+      assert VintageNetProxy.resolve("https://my-bucket.s3.amazonaws.com/") == {:ok, :direct}
     end
 
     test "general internet routes to the local tinyproxy" do
       assert VintageNetProxy.resolve("https://www.google.com/") ==
-               %{scheme: :http, host: @proxy_host, port: @proxy_port}
+               {:ok, %{scheme: :http, host: @proxy_host, port: @proxy_port}}
 
       assert VintageNetProxy.resolve("https://github.com/") ==
-               %{scheme: :http, host: @proxy_host, port: @proxy_port}
+               {:ok, %{scheme: :http, host: @proxy_host, port: @proxy_port}}
     end
   end
 
@@ -139,8 +139,8 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
     test "the resolved proxy descriptor's port is actually listening", %{iface: iface} do
       configure_auto(iface)
 
-      descriptor = VintageNetProxy.resolve("https://example.com/")
-      assert %{host: host, port: port} = descriptor
+      assert {:ok, %{host: host, port: port}} =
+               VintageNetProxy.resolve("https://example.com/")
 
       {:ok, sock} = :gen_tcp.connect(String.to_charlist(host), port, [], 1_000)
       :gen_tcp.close(sock)
@@ -197,7 +197,7 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
       assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://www.google.com/") ==
-               %{scheme: :http, host: @proxy_host, port: @proxy_port}
+               {:ok, %{scheme: :http, host: @proxy_host, port: @proxy_port}}
     end
 
     test "a `deconfig` event clears the cached wpad URL", %{iface: iface} do
@@ -248,7 +248,8 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
     test "GET through the proxy returns the upstream body", %{iface: iface} do
       configure_auto(iface)
 
-      %{host: host, port: port} = VintageNetProxy.resolve("https://www.google.com/")
+      assert {:ok, %{host: host, port: port}} =
+               VintageNetProxy.resolve("https://www.google.com/")
 
       {:ok, sock} =
         :gen_tcp.connect(

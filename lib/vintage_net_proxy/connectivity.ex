@@ -240,10 +240,23 @@ defmodule VintageNetProxy.Connectivity do
   # regardless of URL — including `{:auto, _}` non-ready states, where
   # we fall back to a direct probe so the connectivity status honestly
   # reports failure when the firewall blocks it.
+  #
+  # `VintageNetProxy.resolve/1` returns `{:ok, _} | {:error, _}` now;
+  # for the probe we collapse errors to a direct attempt — same
+  # spirit as the rest of the non-ready arms. The connectivity status
+  # the probe ultimately publishes will reflect whether direct works
+  # on the wire, which is the question the checker is answering.
   defp decide(:unset, _url), do: :direct
   defp decide(:direct, _url), do: :direct
   defp decide({:manual, descriptor}, _url), do: descriptor
-  defp decide({:auto, :ready}, url), do: VintageNetProxy.resolve(url)
+
+  defp decide({:auto, :ready}, url) do
+    case VintageNetProxy.resolve(url) do
+      {:ok, decision} -> decision
+      {:error, _} -> :direct
+    end
+  end
+
   defp decide({:auto, _}, _url), do: :direct
 
   defp set_status(%{status: status} = state, status), do: state

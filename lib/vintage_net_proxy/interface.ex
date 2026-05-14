@@ -113,12 +113,13 @@ defmodule VintageNetProxy.Interface do
   def value(_), do: :unset
 
   @typedoc """
-  Strict resolve result. `:ok` means the resolution was decisive; the
-  caller should connect using the returned directive. `:error` means
-  the library couldn't confidently route this URL through a proxy and
-  the caller should refuse / wait / alert rather than silently bypass.
+  Resolve result. `:ok` means the resolution was decisive; the caller
+  should connect using the returned directive. `:error` means the
+  library couldn't confidently route this URL through a proxy and
+  the caller should decide what to do — refuse, wait, alert, or
+  explicitly collapse the error to a direct connection.
   """
-  @type strict_result :: {:ok, :direct | proxy_descriptor()} | {:error, term()}
+  @type resolve_result :: {:ok, :direct | proxy_descriptor()} | {:error, term()}
 
   @typep proxy_descriptor :: %{
            required(:scheme) => :http | :https | :socks4 | :socks5,
@@ -127,43 +128,37 @@ defmodule VintageNetProxy.Interface do
          }
 
   @doc """
-  Evaluate the loaded PAC against `url` (or apply manual/direct intent).
-  Returns the bare directive (`:direct` or a proxy descriptor) so the
-  per-URL caller has a concrete action regardless of how the PAC got
-  there. See `resolve_strict/2` for an error-tuple variant that
-  refuses on suspicious answers.
+  Resolve the proxy for `url` given this interface's snapshot.
+
+  Returns `{:ok, directive}` when a decisive answer was reached and
+  `{:error, reason}` when it wasn't. `directive` is `:direct` or a
+  proxy descriptor.
+
+  Error reasons:
+
+    * `:pac_default_direct` — PAC matched no rule, the script's
+      default is `DIRECT`. Could be intentional (open network), or
+      a misconfigured corporate PAC missing a `PROXY` default.
+    * `:pac_fallthrough` — PAC matched no rule *and* no extractable
+      default. The script is malformed or uses syntax this evaluator
+      silently skips.
+    * `:no_pac_url` — auto mode, no `:pac_url`, no DHCP wpad, no
+      DHCP domain to derive one from.
+    * `{:pac_fetch_failed, reason}` — auto mode, the last fetch
+      attempt failed.
+    * `:no_proxy_resolved` — no intent on this interface.
+
+  Rules that explicitly return `DIRECT` (e.g. internal-host bypass
+  patterns) are still `{:ok, :direct}` — the PAC author asked for
+  that.
+
+  As a side-effect, the function logs at `:info` for
+  `:pac_default_direct` and at `:warning` for `:pac_fallthrough` so
+  operators see those cases in logs even when the caller silently
+  collapses the error to a direct connection.
   """
+  @spec resolve(t(), String.t()) :: resolve_result()
   def resolve(state, url) do
-    case state.intent do
-      %{mode: :direct} ->
-        :direct
-
-      %{mode: :manual} = m ->
-        Config.to_descriptor(m)
-
-      %{mode: :auto} when is_binary(state.pac_script) ->
-        state.pac_script
-        |> PAC.find_proxy(url)
-        |> log_pac_result(state.iface, url)
-
-      _ ->
-        :direct
-    end
-  end
-
-  @doc """
-  Strict variant of `resolve/2`. Returns `{:ok, directive}` when a
-  decisive answer was reached and `{:error, reason}` when it wasn't —
-  i.e., the PAC fell through entirely, the PAC's default itself was
-  `DIRECT`, no PAC URL was discoverable, the fetch failed, or no
-  interface was eligible. Use this when a proxy is mandatory in your
-  deployment and silently bypassing it is operationally wrong.
-
-  PAC rules that explicitly return `DIRECT` (e.g. internal-host
-  bypass patterns) are still `:ok` — the author asked for that.
-  """
-  @spec resolve_strict(t(), String.t()) :: strict_result()
-  def resolve_strict(state, url) do
     case state.intent do
       %{mode: :direct} ->
         {:ok, :direct}
@@ -172,12 +167,9 @@ defmodule VintageNetProxy.Interface do
         {:ok, Config.to_descriptor(m)}
 
       %{mode: :auto} when is_binary(state.pac_script) ->
-        case PAC.find_proxy(state.pac_script, url) do
-          {:rule, directive} -> {:ok, directive}
-          {:default, :direct} -> {:error, :pac_default_direct}
-          {:default, descriptor} -> {:ok, descriptor}
-          {:fallthrough, _} -> {:error, :pac_fallthrough}
-        end
+        state.pac_script
+        |> PAC.find_proxy(url)
+        |> handle_pac_result(state.iface, url)
 
       %{mode: :auto} ->
         cond do
@@ -194,24 +186,15 @@ defmodule VintageNetProxy.Interface do
   end
 
   # `PAC.find_proxy/2` returns `{source, directive}` so we can tell
-  # *why* PAC produced its answer. Use the source tag to log
-  # differentially:
+  # *why* PAC produced its answer. Use the source tag to:
   #
-  #   * `{:rule, _}` — the author wrote a rule that fired. Silent;
-  #     this is working as designed.
-  #   * `{:default, :direct}` — no rule matched and the author's
-  #     default is `DIRECT`. Could be intentional (open network), or
-  #     a misconfigured corporate PAC missing a `PROXY` default. Log
-  #     at `:info` so operators see it without enabling debug.
-  #   * `{:fallthrough, _}` — no rule matched *and* no extractable
-  #     default. The script is malformed or uses syntax this
-  #     evaluator silently skips. Log at `:warning`.
-  #
-  # In every case we strip the tag and hand the caller the bare
-  # directive (`:direct` or a descriptor) — `resolve/2`'s contract.
-  defp log_pac_result({:rule, directive}, _iface, _url), do: directive
+  #   * Differentiate :ok from :error returns (only :rule and
+  #     :default-with-descriptor are decisive enough to claim :ok).
+  #   * Log the suspicious cases at a useful level so they're visible
+  #     even when the caller silently collapses the error to direct.
+  defp handle_pac_result({:rule, directive}, _iface, _url), do: {:ok, directive}
 
-  defp log_pac_result({:default, :direct}, iface, url) do
+  defp handle_pac_result({:default, :direct}, iface, url) do
     Logger.info(
       "VintageNetProxy: PAC default on #{iface} evaluated to DIRECT for #{inspect(url)}",
       pac: :default_direct,
@@ -219,12 +202,12 @@ defmodule VintageNetProxy.Interface do
       url: url
     )
 
-    :direct
+    {:error, :pac_default_direct}
   end
 
-  defp log_pac_result({:default, descriptor}, _iface, _url), do: descriptor
+  defp handle_pac_result({:default, descriptor}, _iface, _url), do: {:ok, descriptor}
 
-  defp log_pac_result({:fallthrough, directive}, iface, url) do
+  defp handle_pac_result({:fallthrough, _directive}, iface, url) do
     Logger.warning(
       "VintageNetProxy: PAC on #{iface} matched no rules and had no default; " <>
         "defaulting to DIRECT for #{inspect(url)}",
@@ -233,7 +216,7 @@ defmodule VintageNetProxy.Interface do
       url: url
     )
 
-    directive
+    {:error, :pac_fallthrough}
   end
 
   @doc "Introspection snapshot."

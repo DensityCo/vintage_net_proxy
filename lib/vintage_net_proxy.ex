@@ -172,61 +172,53 @@ defmodule VintageNetProxy do
         }
   def status, do: Selector.status()
 
-  @doc """
-  Resolve the proxy for a specific URL.
-
-  With a PAC script loaded, the script is evaluated for the given URL.
-  Manual configurations apply regardless of the URL. Collapses every
-  "no proxy resolved" case (`:unset`, no PAC URL, PAC fetch failed,
-  PAC fell through) to `:direct` — the simplest reasonable default
-  for callers that just need a connect-this answer.
-
-  See `resolve_strict/1` for an error-tuple variant that refuses on
-  those cases instead of silently going direct.
-  """
-  @spec resolve(String.t()) :: resolved()
-  def resolve(url) when is_binary(url), do: Selector.resolve(url)
-
   @typedoc """
-  Strict resolve result. `:ok` means the resolution was decisive; the
+  `resolve/1` result. `:ok` means the resolution was decisive; the
   caller should connect using the returned directive. `:error` means
-  the library couldn't confidently route this URL through a proxy and
-  the caller should refuse / wait / alert rather than silently bypass.
+  the library couldn't confidently route this URL through a proxy
+  and the caller should decide what to do — refuse, wait, alert, or
+  explicitly collapse the error to a direct connection.
 
-  Reason atoms:
+  Error reasons:
 
-    * `:pac_fallthrough` — PAC mode active, no rule matched, no
+    * `:pac_default_direct` — PAC mode active, no rule matched, the
+      script's default is `DIRECT`. Possibly intentional on an open
+      network, suspicious on a mandatory-proxy deployment.
+    * `:pac_fallthrough` — PAC mode active, no rule matched and no
       default extractable. Script is malformed or uses syntax we
       can't evaluate.
-    * `:pac_default_direct` — PAC mode active, no rule matched, the
-      script's default is `DIRECT`. Possibly intentional for an open
-      network, but suspicious on a mandatory-proxy deployment.
     * `:no_pac_url` — auto mode but no `:pac_url`, no DHCP wpad, no
       DHCP domain.
     * `{:pac_fetch_failed, reason}` — auto mode, the last fetch
       attempt failed.
     * `:no_proxy_resolved` — no eligible interface (no intent, or
       none up).
-  """
-  @type strict_result :: {:ok, resolved()} | {:error, term()}
-
-  @doc """
-  Strict variant of `resolve/1`. Returns `{:ok, directive}` when a
-  decisive answer was reached and `{:error, reason}` when it wasn't —
-  i.e., the PAC fell through entirely, the PAC's default was itself
-  `DIRECT`, no PAC URL was discoverable, the fetch failed, or no
-  interface was eligible.
-
-  Use this when a proxy is mandatory in your deployment and silently
-  bypassing it is operationally wrong. Most consumers should stick
-  with `resolve/1`; this one is for the "refuse to attempt if the
-  proxy isn't confidently resolved" pattern.
 
   Rules that explicitly return `DIRECT` (internal-host bypass) are
-  still `:ok` — the PAC author asked for that.
+  still `{:ok, :direct}` — the PAC author asked for that.
   """
-  @spec resolve_strict(String.t()) :: strict_result()
-  def resolve_strict(url) when is_binary(url), do: Selector.resolve_strict(url)
+  @type resolve_result :: {:ok, resolved()} | {:error, term()}
+
+  @doc """
+  Resolve the proxy for a specific URL.
+
+  With a PAC script loaded, the script is evaluated for the given URL.
+  Manual configurations apply regardless of the URL. Returns
+  `{:ok, directive}` on a decisive answer or `{:error, reason}` when
+  the library can't confidently route this URL — see `t:resolve_result/0`.
+
+  Consumers that don't care about the distinctions collapse:
+
+      case VintageNetProxy.resolve(url) do
+        {:ok, decision} -> connect(url, decision)
+        {:error, _}     -> connect(url, :direct)
+      end
+
+  Consumers in mandatory-proxy deployments handle the error reasons
+  individually (refuse, wait, alert).
+  """
+  @spec resolve(String.t()) :: resolve_result()
+  def resolve(url) when is_binary(url), do: Selector.resolve(url)
 
   @doc """
   Property table key under which the connectivity check result is
