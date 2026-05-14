@@ -1,4 +1,6 @@
 defmodule VintageNetProxy.Intent do
+  require Logger
+
   @moduledoc """
   The user's proxy intent: schema, validator, type, and helpers.
 
@@ -141,12 +143,31 @@ defmodule VintageNetProxy.Intent do
     * `{:ok, intent}` — valid `:proxy` field present.
     * `{:ok, nil}` — no `:proxy` field, or input isn't a map. Not an
       error: "no proxy intent" is a legitimate state.
-    * `{:error, reason}` — `:proxy` is present but invalid. The shell
-      is expected to log this.
+    * `{:error, reason}` — `:proxy` is present but invalid. Callers
+      that just want an intent value should use `adopt/2`, which
+      logs and collapses errors to `nil`.
   """
   @spec from_vintage_net_config(term()) :: {:ok, t() | nil} | {:error, String.t()}
   def from_vintage_net_config(%{proxy: raw}) when is_map(raw), do: normalize(raw)
   def from_vintage_net_config(_), do: {:ok, nil}
+
+  @doc """
+  Adopt the `:proxy` field of a VintageNet config as this interface's
+  intent. Returns the normalized intent on success or `nil` on either
+  "no proxy configured" or invalid input; invalid input is logged at
+  `:warning` with the supplied `iface` for context.
+  """
+  @spec adopt(term(), String.t()) :: t() | nil
+  def adopt(config, iface) do
+    case from_vintage_net_config(config) do
+      {:ok, intent} ->
+        intent
+
+      {:error, reason} ->
+        Logger.warning("VintageNetProxy: invalid :proxy config on #{iface}: #{reason}")
+        nil
+    end
+  end
 
   @doc """
   Convert a `:manual` intent into the runtime proxy descriptor

@@ -12,11 +12,13 @@ defmodule VintageNetProxy.Interface.Proxy do
   have a PAC script right now," and the next PropertyTable event will
   trigger another fetch attempt.
 
-  All functions here are pure. The `VintageNetProxy.Interface`
-  GenServer subscribes to PropertyTable, executes the `Fetcher.get/1`
-  call, and logs. Decisions — what URL to fetch, whether the cache is
-  still valid, what proxy to publish, what proxy `url` should use —
-  live here.
+  Functions here are pure given their arguments. Two operations
+  bridge to the outside world via supplied callbacks or helpers:
+  `refresh_cache/2` takes a fetcher function and invokes it, and
+  `put_intent_from_config/2` delegates to `Intent.adopt/2` (which
+  logs on invalid input). The `VintageNetProxy.Interface` GenServer
+  subscribes to PropertyTable and supplies the real `Fetcher.get/1`;
+  tests can pass a stub fetcher instead.
   """
 
   alias VintageNetProxy.{Addresses, Intent, PAC, Wpad}
@@ -65,6 +67,15 @@ defmodule VintageNetProxy.Interface.Proxy do
   @doc "Set the normalized intent. Pass `nil` to clear."
   @spec put_intent(t(), Intent.t() | nil) :: t()
   def put_intent(proxy, intent), do: %{proxy | intent: intent}
+
+  @doc """
+  Adopt the `:proxy` field of a VintageNet config payload as this
+  interface's intent. Invalid input is logged (via `Intent.adopt/2`)
+  and treated as "no intent."
+  """
+  @spec put_intent_from_config(t(), term()) :: t()
+  def put_intent_from_config(proxy, config),
+    do: put_intent(proxy, Intent.adopt(config, proxy.iface))
 
   @doc "Set the connection status (`:internet | :lan | :disconnected | ...`)."
   @spec put_connection(t(), atom() | nil) :: t()
@@ -121,6 +132,23 @@ defmodule VintageNetProxy.Interface.Proxy do
   @doc "Record a successful PAC fetch."
   @spec cache_script(t(), String.t()) :: t()
   def cache_script(proxy, script), do: %{proxy | pac_script: script}
+
+  @doc """
+  Fetch a fresh PAC script through `fetcher` if one is needed and
+  cache it on success. Leaves the proxy unchanged when no fetch is
+  due (script already cached, no URL available) or the fetch fails.
+  `fetcher` is `(String.t() -> {:ok, String.t()} | {:error, term()})`,
+  typically `&VintageNetProxy.Fetcher.get/1`.
+  """
+  @spec refresh_cache(t(), (String.t() -> {:ok, String.t()} | {:error, term()})) :: t()
+  def refresh_cache(proxy, fetcher) do
+    with {:ok, url} <- fetch_target(proxy),
+         {:ok, script} <- fetcher.(url) do
+      cache_script(proxy, script)
+    else
+      _ -> proxy
+    end
+  end
 
   # --- Queries ---
 

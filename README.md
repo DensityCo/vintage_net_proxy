@@ -37,17 +37,17 @@ config :vintage_net_proxy, interfaces: ["eth0", "wlan0"]
 
 The Application starts a supervision tree (`VintageNetProxy.Supervisor`)
 that subscribes to each listed interface's `config`, `dhcp_options`,
-and `connection` properties and publishes the resolved proxy at
-`["proxy", "config"]`. Nothing else is required to bring it up — set
-the `:proxy` field via `VintageNet.configure/3` and the library
-reacts.
+`connection`, and `addresses` properties and publishes the resolved
+proxy at `["proxy", "config"]`. Nothing else is required to bring it
+up — set the `:proxy` field via `VintageNet.configure/3` and the
+library reacts.
 
 ## Property surface
 
 The current proxy *model* is published at `["proxy", "config"]` in the
 `VintageNet` property table. Stateful modes carry a `{mode, sub_state}`
-tuple so loading and error states are first-class instead of being
-collapsed onto `:unset`:
+tuple so that "ready" and "not yet ready" are first-class instead of
+being collapsed onto `:unset`:
 
 | Value | Meaning |
 |---|---|
@@ -426,16 +426,17 @@ the cached script consistent).
 Per-interface GenServers split the problem geographically:
 
   * Each `Interface` owns one network interface end-to-end — subscribes
-    to its three PropertyTable keys (`config`, `dhcp_options`,
-    `connection`), holds the per-interface state (intent, connection,
-    DHCP wpad, cached `pac_script`), and runs `Fetcher.get/1`
-    synchronously inside its own mailbox. **The blocking is real but
-    localized**: it only stalls that interface's own event processing,
-    not the Selector or other interfaces.
+    to its four PropertyTable keys (`config`, `dhcp_options`,
+    `connection`, `addresses`), keeps a per-interface
+    `Interface.Proxy` value (intent, connection, DHCP options, local
+    IP, cached PAC script), and runs `Fetcher.get/1` synchronously
+    inside its own mailbox. **The blocking is real but localized**:
+    it only stalls that interface's own event processing, not the
+    Selector or other interfaces.
 
   * The `Selector` shrinks to a snapshot aggregator. Each Interface
-    pushes its full state to the Selector via
-    `{:interface_changed, iface, state}` after every change. The
+    pushes its `Interface.Proxy` to the Selector via
+    `{:interface_changed, iface, proxy}` after every change. The
     Selector keeps the latest snapshot per interface in a `Roster`,
     picks the highest-priority eligible interface, and publishes the
     resulting proxy value. **`resolve/1` and `status/0` are served
@@ -482,11 +483,23 @@ debugging or external inspection.
 
 ### Module map
 
-  * `VintageNetProxy.Interface` — both the per-interface struct (the
-    shape of a snapshot) and the GenServer that maintains it. Pure
-    helpers (`eligible?`, `value`, `resolve`, `effective_pac_url`,
-    `snapshot`) operate on the struct and are tested without a
-    process.
+  * `VintageNetProxy.Interface` — the per-interface GenServer.
+    Subscribes to PropertyTable, dispatches each event through an
+    `Interface.Proxy.put_*` function, supplies `Fetcher.get/1` to
+    `Interface.Proxy.refresh_cache/2`, and pushes the updated proxy
+    to the Selector. No business logic of its own.
+
+  * `VintageNetProxy.Interface.Proxy` — the per-interface struct and
+    every pure query over it: `value/1`, `resolve/2`, `eligible?/1`,
+    `effective_pac_url/1`, `snapshot/1`, plus the cache machinery
+    (`fetch_target/1`, `cache_script/2`, `refresh_cache/2`,
+    `transition/2`). Tested directly without spawning a process.
+
+  * `VintageNetProxy.Intent` — the user-facing proxy intent schema
+    (`:direct | :auto | :manual`), its validator (`normalize/1`,
+    `normalize!/1`), and the `adopt/2` helper that turns a VintageNet
+    config payload into a normalized intent, logging on invalid
+    input.
 
   * `VintageNetProxy.Selector` — a thin GenServer (~35 lines). One
     handle_info clause for `{:interface_changed, ...}`, two
@@ -494,16 +507,26 @@ debugging or external inspection.
     and no PropertyTable subscriptions.
 
   * `VintageNetProxy.Roster` — a pure module: priority list of
-    interfaces plus `%{iface => Interface.t}`. Knows how to find the
-    active interface and to compute the published `value`, the
-    `resolve` result, and the `status` map.
+    interfaces plus `%{iface => Interface.Proxy.t}`. Knows how to
+    find the active interface and to compute the published `value`,
+    the `resolve` result, and the `status` map.
 
   * `VintageNetProxy.Publisher` — owns the single public PropertyTable
     key this library writes (`["proxy", "config"]`). Three calls:
     `put/1`, `get/0`, `property/0`. Selector is the only caller.
 
   * `VintageNetProxy.Fetcher` — synchronous `Fetcher.get(url)` using
-    `:httpc`. Has a 5-second timeout and a 256 KiB body cap.
+    `:httpc`. Has a 5-second timeout and a 256 KiB body cap. Logs a
+    warning on every failure path so callers don't have to thread
+    error reasons through state.
+
+  * `VintageNetProxy.Wpad` — DNS-WPAD URL construction (option 15 →
+    `http://wpad.<domain>/wpad.dat`) and DHCP-option extraction
+    (`from_dhcp_options/1` pulls option 252 and option 15).
+
+  * `VintageNetProxy.Addresses` — pulls the first IPv4 address from
+    VintageNet's `addresses` property into the dotted-quad string
+    PAC's `myIpAddress()` needs.
 
   * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP` — the PAC
     script evaluator (see "PAC subset" below).

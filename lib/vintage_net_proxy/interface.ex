@@ -9,17 +9,16 @@ defmodule VintageNetProxy.Interface do
   updated proxy to the Selector on every change.
 
   All decisions — what URL to fetch, what proxy to publish, what to
-  resolve a URL to — live in `VintageNetProxy.Interface.Proxy`.
-  This module only orchestrates: subscribe, parse the payload, hand
-  to Proxy, perform the fetch, log, send the result upstream.
+  resolve a URL to — live in `VintageNetProxy.Interface.Proxy`. The
+  shell here only subscribes, reads the raw payloads, dispatches them
+  through `Proxy.put_*` functions, supplies the real fetcher, and
+  forwards the result.
 
   See the Architecture section of the README for the full picture.
   """
   use GenServer
 
-  require Logger
-
-  alias VintageNetProxy.{Fetcher, Intent}
+  alias VintageNetProxy.Fetcher
   alias VintageNetProxy.Interface.Proxy
 
   # --- Client API ---
@@ -70,10 +69,10 @@ defmodule VintageNetProxy.Interface do
     proxy =
       proxy
       |> Proxy.put_connection(VintageNet.get(["interface", iface, "connection"]))
-      |> apply_intent(VintageNet.get(["interface", iface, "config"]))
+      |> Proxy.put_intent_from_config(VintageNet.get(["interface", iface, "config"]))
       |> Proxy.put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
       |> Proxy.put_addresses(VintageNet.get(["interface", iface, "addresses"]))
-      |> maybe_fetch()
+      |> Proxy.refresh_cache(&Fetcher.get/1)
 
     push(parent, proxy)
     {:noreply, {proxy, parent}}
@@ -84,7 +83,7 @@ defmodule VintageNetProxy.Interface do
 
   @impl true
   def handle_info({VintageNet, ["interface", _, "config"], _o, new, _m}, ps),
-    do: handle_event(ps, &apply_intent(&1, new))
+    do: handle_event(ps, &Proxy.put_intent_from_config(&1, new))
 
   def handle_info({VintageNet, ["interface", _, "dhcp_options"], _o, new, _m}, ps),
     do: handle_event(ps, &Proxy.put_dhcp_options(&1, new))
@@ -103,38 +102,10 @@ defmodule VintageNetProxy.Interface do
     proxy =
       proxy
       |> Proxy.transition(change_fn)
-      |> maybe_fetch()
+      |> Proxy.refresh_cache(&Fetcher.get/1)
 
     push(parent, proxy)
     {:noreply, {proxy, parent}}
-  end
-
-  # Normalize the VintageNet config payload into an intent; log and
-  # clear on invalid input. Logging is a side effect, so it lives in
-  # the shell rather than in `Intent`.
-  defp apply_intent(proxy, config) do
-    case Intent.from_vintage_net_config(config) do
-      {:ok, intent} ->
-        Proxy.put_intent(proxy, intent)
-
-      {:error, reason} ->
-        Logger.warning("VintageNetProxy: invalid :proxy config on #{proxy.iface}: #{reason}")
-        Proxy.put_intent(proxy, nil)
-    end
-  end
-
-  # Synchronous fetch inside the Interface's own mailbox. Blocking is
-  # fine here — the Selector and other interfaces are unaffected. The
-  # decision of whether to fetch (and the URL) comes from `Proxy`,
-  # the failure logging from `Fetcher`; this just dispatches the
-  # result back to the proxy's cache.
-  defp maybe_fetch(proxy) do
-    with {:ok, url} <- Proxy.fetch_target(proxy),
-         {:ok, script} <- Fetcher.get(url) do
-      Proxy.cache_script(proxy, script)
-    else
-      _ -> proxy
-    end
   end
 
   defp push(parent, proxy), do: send(parent, {:interface_changed, proxy.iface, proxy})

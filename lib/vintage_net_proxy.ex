@@ -8,8 +8,8 @@ defmodule VintageNetProxy do
 
   The current proxy *model* is published at `["proxy", "config"]` in
   the `VintageNet` property table. Stateful modes carry a `{mode,
-  sub_state}` tuple so that loading / error states are first-class
-  instead of being collapsed onto `:unset`:
+  sub_state}` tuple so that "ready" and "not yet ready" are
+  first-class instead of being collapsed onto `:unset`:
 
     * `:unset` — no eligible interface, or eligible interface has no
       `:proxy` intent

@@ -2,9 +2,10 @@ defmodule VintageNetProxy.Selector do
   @moduledoc """
   Snapshot aggregator GenServer.
 
-  Receives `{:interface_changed, iface, state}` messages from each
-  `VintageNetProxy.Interface` process, keeps the latest snapshot per
-  interface in a `VintageNetProxy.Roster`, picks the highest-priority
+  Receives `{:interface_changed, iface, proxy}` messages from each
+  `VintageNetProxy.Interface` process — where `proxy` is the latest
+  `VintageNetProxy.Interface.Proxy` value for that interface — keeps
+  them in a `VintageNetProxy.Roster`, picks the highest-priority
   eligible interface, and publishes the resulting proxy value via
   `VintageNetProxy.Publisher`. Serves `resolve/1` and `status/0` from
   the cached snapshots so neither call ever blocks on an in-flight
