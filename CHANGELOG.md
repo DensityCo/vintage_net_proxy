@@ -43,6 +43,23 @@ proxy at `["proxy", "config"]`.
   (`domain`) and fetches that. No DNS hierarchy walking (a known
   spoofing vector).
 
+### Fetcher TLS
+
+* `VintageNetProxy.Fetcher` now passes explicit `ssl` options to
+  `:httpc` on every request. On OTP 26+, `:httpc`'s default-options
+  builder eagerly calls `:public_key.cacerts_get/0` for *every*
+  request — HTTP or HTTPS — and on systems with no OS CA store
+  (Nerves images, minimal containers) that raises
+  `FunctionClauseError` from `pubkey_os_cacerts`. Passing explicit
+  ssl opts short-circuits the default builder.
+* For `https://` PAC URLs, the fetcher uses `verify: :verify_peer`
+  with `:public_key.cacerts_get/0` and hostname verification. If the
+  OS has no CA store, `get/1` returns `{:error, :no_cacerts}` rather
+  than silently downgrading to `verify_none`. Ship a CA bundle (e.g.
+  `castore`) and configure
+  `config :vintage_net_proxy, :fetcher, cacertfile: CAStore.file_path()`
+  (or `cacerts: ...`) to enable HTTPS PAC fetching.
+
 ### Connectivity checker
 
 * `VintageNetProxy.Connectivity` — optional, off by default. Enable
