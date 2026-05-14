@@ -24,6 +24,14 @@ defmodule VintageNetProxy.PAC do
       supplied via `:resolver` on `find_proxy/3` (defaults to
       `VintageNetProxy.PAC.DNS.resolve/1`)
     * `isResolvable(host)` — true if `host` resolves to any IP
+    * `weekdayRange("MON", ["FRI"], ["GMT"])` — current weekday is
+      in range; wraps when `wd2 < wd1`
+    * `timeRange(...)` — current time is in `[start, end)`; arities
+      1 / 2 / 4 / 6 (hour / hour-range / hh:mm / hh:mm:ss), each
+      optionally with a trailing `"GMT"`
+    * `dateRange(...)` — current date in range; arities 1 / 2 / 4 / 6
+      classified by arg type (month-name string, day int [1..31],
+      year int [1000..9999]). Optional trailing `"GMT"`.
     * `host == "<literal>"` / `host === "<literal>"`
 
   Directives supported:
@@ -89,9 +97,9 @@ defmodule VintageNetProxy.PAC do
       Signature `(String.t() -> {:ok, String.t()} | :error)`.
       Defaults to `&VintageNetProxy.PAC.DNS.resolve/1`, which uses
       `:inet_res` with a 500ms timeout and an ETS-backed cache.
-
-  Future context (wallclock for `weekdayRange`, etc.) slots into the
-  same opts.
+    * `:now` — wallclock function used by `weekdayRange` /
+      `timeRange`. Signature `(:utc | :local -> NaiveDateTime.t())`.
+      Defaults to `&VintageNetProxy.PAC.Clock.now/1`.
   """
   @spec find_proxy(String.t(), String.t(), keyword()) :: result()
   def find_proxy(script, url, opts \\ [])

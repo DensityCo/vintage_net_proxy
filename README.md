@@ -528,9 +528,11 @@ debugging or external inspection.
     VintageNet's `addresses` property into the dotted-quad string
     PAC's `myIpAddress()` needs.
 
-  * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP`, `PAC.DNS` — the
-    PAC script evaluator (see "PAC subset" below). `PAC.DNS` owns an
-    ETS-backed DNS cache used by `dnsResolve` / `isResolvable`.
+  * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP`, `PAC.DNS`,
+    `PAC.Clock` — the PAC script evaluator (see "PAC subset" below).
+    `PAC.DNS` owns an ETS-backed DNS cache used by `dnsResolve` /
+    `isResolvable`; `PAC.Clock` provides the wallclock and range
+    checks used by `weekdayRange` / `timeRange`.
 
   * `VintageNetProxy.Connectivity`, `Connectivity.Probe` — the
     optional connectivity checker; lives outside the main supervision
@@ -618,6 +620,21 @@ WPAD scripts.
   `:error` and the rule falls through.
 - `isResolvable(host)` — true when the host resolves through the
   same cached resolver.
+- `weekdayRange("MON", ["FRI"], ["GMT"])` — current weekday in range.
+  Wraps when `wd2 < wd1` (e.g. `"FRI", "MON"` covers Fri/Sat/Sun/Mon).
+  Optional trailing `"GMT"` switches from local to UTC time.
+- `timeRange(...)` — current time-of-day in `[start, end)`. Arities
+  1 (hour), 2 (hour-range), 4 (hh:mm), 6 (hh:mm:ss); each
+  optionally with a trailing `"GMT"`. No wrap-around — night-shift
+  ranges crossing midnight require two `timeRange` calls combined
+  with `||`.
+- `dateRange(...)` — current date in range. Args are classified by
+  type: string → month (`"JAN"`–`"DEC"`), int [1..31] → day of
+  month, int [1000..9999] → year. Valid arities: 1 / 2 / 4 / 6 in
+  fixed type sequences (e.g. `(day, month, day, month)` for a
+  within-a-year range). Day, month, and day-month ranges wrap;
+  year, month-year, and full-date ranges do not. Optional trailing
+  `"GMT"`.
 - `host == "<literal>"` / `host === "<literal>"`
 
 **Boolean composition:** `||`, `&&`, `!`, and parentheses. Standard
@@ -645,8 +662,15 @@ cache. The cache GenServer lives in the main supervision tree; when
 it isn't running (unit tests), the resolver returns `:error` so
 predicates fall through gracefully without crashing.
 
-If real-world PAC files need more (`weekdayRange`, IPv6 variants,
-credential parsing, etc.), extend `VintageNetProxy.PAC.Predicate`.
+Time-based predicates (`weekdayRange`, `timeRange`) use the
+wallclock injected via `:now` on `find_proxy/3`; the default
+(`VintageNetProxy.PAC.Clock.now/1`) uses Erlang's `:calendar`
+module, so no timezone database is required. Tests pass a stub fn
+that returns a fixed `NaiveDateTime`.
+
+IPv6 variants (`dnsResolveEx`, `isResolvableEx`, `myIpAddressEx`,
+`isInNetEx`) and `dnsDomainLevels` are not implemented; extend
+`VintageNetProxy.PAC.Predicate` if a deployment needs them.
 
 ## Why no Duktape / PACrunner
 

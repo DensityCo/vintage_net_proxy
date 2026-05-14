@@ -360,9 +360,161 @@ defmodule VintageNetProxy.PAC.PredicateTest do
     end
   end
 
+  describe "weekdayRange" do
+    # 2025-01-07 is a Tuesday at noon.
+    defp tue_noon, do: fn _ -> ~N[2025-01-07 12:00:00] end
+    defp sat_noon, do: fn _ -> ~N[2025-01-04 12:00:00] end
+
+    test "single-day matches" do
+      assert Predicate.eval(~s|weekdayRange("TUE")|, now: tue_noon())
+    end
+
+    test "single-day misses" do
+      refute Predicate.eval(~s|weekdayRange("MON")|, now: tue_noon())
+    end
+
+    test "MON-FRI covers Tuesday" do
+      assert Predicate.eval(~s|weekdayRange("MON", "FRI")|, now: tue_noon())
+    end
+
+    test "MON-FRI doesn't cover Saturday" do
+      refute Predicate.eval(~s|weekdayRange("MON", "FRI")|, now: sat_noon())
+    end
+
+    test "wrap-around: FRI-MON covers Saturday" do
+      assert Predicate.eval(~s|weekdayRange("FRI", "MON")|, now: sat_noon())
+    end
+
+    test "GMT picks the UTC time" do
+      # 22:00 UTC is Tuesday; 14:00 local stays Tuesday — same day,
+      # so both branches return true. Test the dispatch by stubbing
+      # different days per tz.
+      now = fn
+        :utc -> ~N[2025-01-08 02:00:00]
+        :local -> ~N[2025-01-07 18:00:00]
+      end
+
+      assert Predicate.eval(~s|weekdayRange("WED", "GMT")|, now: now)
+      refute Predicate.eval(~s|weekdayRange("WED")|, now: now)
+    end
+  end
+
+  describe "timeRange" do
+    defp noon, do: fn _ -> ~N[2025-01-07 12:00:00] end
+    defp morning, do: fn _ -> ~N[2025-01-07 08:00:00] end
+
+    test "single-hour covers mid-hour" do
+      assert Predicate.eval(~s|timeRange(12)|, now: noon())
+    end
+
+    test "single-hour misses outside hour" do
+      refute Predicate.eval(~s|timeRange(8)|, now: noon())
+    end
+
+    test "hour range 9-17 covers noon" do
+      assert Predicate.eval(~s|timeRange(9, 17)|, now: noon())
+    end
+
+    test "hour range 9-17 misses morning" do
+      refute Predicate.eval(~s|timeRange(9, 17)|, now: morning())
+    end
+
+    test "hh:mm range" do
+      assert Predicate.eval(~s|timeRange(11, 30, 12, 30)|, now: noon())
+      refute Predicate.eval(~s|timeRange(13, 0, 14, 0)|, now: noon())
+    end
+
+    test "hh:mm:ss range with GMT picks UTC" do
+      now = fn
+        :utc -> ~N[2025-01-07 22:00:00]
+        :local -> ~N[2025-01-07 14:00:00]
+      end
+
+      assert Predicate.eval(~s|timeRange(21, 0, 0, 23, 0, 0, "GMT")|, now: now)
+      refute Predicate.eval(~s|timeRange(21, 0, 0, 23, 0, 0)|, now: now)
+    end
+  end
+
+  describe "dateRange" do
+    # 2025-01-07 — January 7, 2025.
+    defp jan_7, do: fn _ -> ~N[2025-01-07 12:00:00] end
+
+    test "single day" do
+      assert Predicate.eval(~s|dateRange(7)|, now: jan_7())
+      refute Predicate.eval(~s|dateRange(8)|, now: jan_7())
+    end
+
+    test "single month" do
+      assert Predicate.eval(~s|dateRange("JAN")|, now: jan_7())
+      refute Predicate.eval(~s|dateRange("FEB")|, now: jan_7())
+    end
+
+    test "single year" do
+      assert Predicate.eval(~s|dateRange(2025)|, now: jan_7())
+      refute Predicate.eval(~s|dateRange(2024)|, now: jan_7())
+    end
+
+    test "day range" do
+      assert Predicate.eval(~s|dateRange(1, 10)|, now: jan_7())
+      refute Predicate.eval(~s|dateRange(10, 20)|, now: jan_7())
+    end
+
+    test "month range" do
+      assert Predicate.eval(~s|dateRange("JAN", "MAR")|, now: jan_7())
+      refute Predicate.eval(~s|dateRange("APR", "JUN")|, now: jan_7())
+    end
+
+    test "month range wraps" do
+      assert Predicate.eval(~s|dateRange("NOV", "FEB")|, now: jan_7())
+    end
+
+    test "year range" do
+      assert Predicate.eval(~s|dateRange(2024, 2026)|, now: jan_7())
+      refute Predicate.eval(~s|dateRange(2026, 2027)|, now: jan_7())
+    end
+
+    test "day+month range (within a year)" do
+      assert Predicate.eval(~s|dateRange(1, "JAN", 30, "JUN")|, now: jan_7())
+      refute Predicate.eval(~s|dateRange(1, "JUL", 30, "DEC")|, now: jan_7())
+    end
+
+    test "month+year range" do
+      assert Predicate.eval(~s|dateRange("DEC", 2024, "MAR", 2025)|, now: jan_7())
+      refute Predicate.eval(~s|dateRange("JUN", 2025, "DEC", 2025)|, now: jan_7())
+    end
+
+    test "full date range" do
+      assert Predicate.eval(~s|dateRange(1, "JAN", 2025, 31, "JAN", 2025)|, now: jan_7())
+      refute Predicate.eval(~s|dateRange(1, "FEB", 2025, 31, "DEC", 2025)|, now: jan_7())
+    end
+
+    test "GMT picks UTC" do
+      now = fn
+        :utc -> ~N[2025-02-01 02:00:00]
+        :local -> ~N[2025-01-31 18:00:00]
+      end
+
+      assert Predicate.eval(~s|dateRange("FEB", "GMT")|, now: now)
+      refute Predicate.eval(~s|dateRange("FEB")|, now: now)
+    end
+
+    test "mismatched arg types → false" do
+      # (day, year) — can't classify as any allowed shape.
+      refute Predicate.eval(~s|dateRange(15, 2025)|, now: jan_7())
+    end
+
+    test "unrecognized month name → false" do
+      refute Predicate.eval(~s|dateRange("BAD")|, now: jan_7())
+    end
+
+    test "int outside [1..31] ∪ [1000..9999] → false" do
+      refute Predicate.eval(~s|dateRange(99)|, now: jan_7())
+    end
+  end
+
   describe "error handling" do
     test "unsupported atom evaluates to false" do
-      refute Predicate.eval(~s|weekdayRange("MON", "FRI")|, host: "intranet")
+      refute Predicate.eval(~s|dnsResolveEx(host)|, host: "intranet")
     end
 
     test "unbalanced parens — falls through to false" do
