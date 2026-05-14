@@ -209,7 +209,8 @@ defmodule VintageNetProxyTest do
 
     test "PAC with a matching DIRECT rule → {:ok, :direct} (intentional bypass)",
          %{config_property: prop, iface: iface} do
-      pac = ~s|function FindProxyForURL(url, host) { if (host == "internal") return "DIRECT"; return "PROXY p:8080"; }|
+      pac =
+        ~s|function FindProxyForURL(url, host) { if (host == "internal") return "DIRECT"; return "PROXY p:8080"; }|
 
       port = serve_once(pac)
 
