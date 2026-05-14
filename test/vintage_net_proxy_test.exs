@@ -82,11 +82,8 @@ defmodule VintageNetProxyTest do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == %{
-               scheme: :http,
-               host: "p.corp",
-               port: 8080
-             }
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
     test "preserves credentials in the published descriptor",
@@ -103,13 +100,15 @@ defmodule VintageNetProxyTest do
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == %{
-               scheme: :socks5,
-               host: "s.corp",
-               port: 1080,
-               username: "alice",
-               password: "secret"
-             }
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual,
+                %{
+                  scheme: :socks5,
+                  host: "s.corp",
+                  port: 1080,
+                  username: "alice",
+                  password: "secret"
+                }}
     end
 
     test "defaults scheme to :http when omitted", %{config_property: prop, iface: iface} do
@@ -119,7 +118,9 @@ defmodule VintageNetProxyTest do
       })
 
       flush(iface)
-      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p", port: 80}
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual, %{scheme: :http, host: "p", port: 80}}
     end
   end
 
@@ -192,7 +193,7 @@ defmodule VintageNetProxyTest do
   end
 
   describe "intent: :auto end-to-end (fetch + evaluate)" do
-    test "explicit :pac_url is fetched, property goes :auto, resolve returns the descriptor",
+    test "explicit :pac_url is fetched, property goes {:auto, :ready}, resolve returns the descriptor",
          %{config_property: prop, iface: iface} do
       port = serve_once(~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|)
 
@@ -203,7 +204,7 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
       assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
 
       assert VintageNetProxy.resolve("https://api.example.com/") ==
@@ -226,7 +227,7 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://api.corp/") ==
                %{scheme: :http, host: "corp", port: 8080}
@@ -252,7 +253,7 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://anything/") ==
                %{scheme: :http, host: "explicit", port: 1}
@@ -279,7 +280,7 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://api.corp.example.com/") == :direct
       assert VintageNetProxy.resolve("http://intranet/") == :direct
@@ -357,7 +358,9 @@ defmodule VintageNetProxyTest do
 
       flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == primary
-      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p", port: 80}
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual, %{scheme: :http, host: "p", port: 80}}
     end
 
     test "falls back when the active interface drops; reclaims on reconnect",
@@ -374,17 +377,23 @@ defmodule VintageNetProxyTest do
 
       flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == primary
-      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p1", port: 80}
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual, %{scheme: :http, host: "p1", port: 80}}
 
       PropertyTable.put(VintageNet, ["interface", primary, "connection"], :disconnected)
       flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == secondary
-      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "s1", port: 80}
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual, %{scheme: :http, host: "s1", port: 80}}
 
       PropertyTable.put(VintageNet, ["interface", primary, "connection"], :internet)
       flush_two(primary, secondary)
       assert VintageNetProxy.status().active_iface == primary
-      assert VintageNet.get(["proxy", "config"]) == %{scheme: :http, host: "p1", port: 80}
+
+      assert VintageNet.get(["proxy", "config"]) ==
+               {:manual, %{scheme: :http, host: "p1", port: 80}}
     end
 
     test "interfaces not in the configured list are ignored",

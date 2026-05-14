@@ -75,7 +75,7 @@ defmodule VintageNetProxy.Connectivity do
   subscribes to `["proxy", "config"]` and `["proxy", "pac_revision"]`
   to re-probe when the resolved proxy flips or its PAC reloads
   in-place, and calls `VintageNetProxy.resolve/1` when the published
-  value is `:auto`. It writes only `["proxy", "connectivity"]`.
+  value is `{:auto, :ready}`. It writes only `["proxy", "connectivity"]`.
 
   ## Re-probe triggers
 
@@ -84,8 +84,8 @@ defmodule VintageNetProxy.Connectivity do
     3. `["proxy", "config"]` changes — different proxy model.
     4. `["proxy", "pac_revision"]` ticks — same PAC URL, new script
        body. The `config` property can't distinguish this case
-       (both states publish `:auto`), so the Selector emits a separate
-       tick on in-place reloads.
+       (both states publish `{:auto, :ready}`), so the Selector emits
+       a separate tick on in-place reloads.
   """
   use GenServer
 
@@ -203,7 +203,8 @@ defmodule VintageNetProxy.Connectivity do
   # Both signals — a fresh `config` value and a PAC reload tick — mean
   # the previous probe result no longer describes reality. Pac_revision
   # exists specifically because in-place PAC reloads leave `config`
-  # unchanged at `:auto`; see `VintageNetProxy.Publisher` for the why.
+  # unchanged at `{:auto, :ready}`; see `VintageNetProxy.Publisher` for
+  # the why.
   def handle_info({VintageNet, path, _old, _new, _meta}, state)
       when path in [@config_path, @pac_revision_path] do
     cancel(state.timer)
@@ -234,12 +235,16 @@ defmodule VintageNetProxy.Connectivity do
     end)
   end
 
-  # `:auto` means "PAC is loaded; ask the Selector what the proxy is
-  # for *this* URL." Everything else resolves the same regardless of URL.
+  # `{:auto, :ready}` means PAC is loaded; ask the Selector what the
+  # proxy is for *this* URL. Everything else resolves the same
+  # regardless of URL — including `{:auto, {:error, _}}`, where we
+  # fall back to a direct probe so the connectivity status honestly
+  # reports failure when the firewall blocks it.
   defp decide(:unset, _url), do: :direct
   defp decide(:direct, _url), do: :direct
-  defp decide(:auto, url), do: VintageNetProxy.resolve(url)
-  defp decide(%{} = descriptor, _url), do: descriptor
+  defp decide({:manual, descriptor}, _url), do: descriptor
+  defp decide({:auto, :ready}, url), do: VintageNetProxy.resolve(url)
+  defp decide({:auto, {:error, _}}, _url), do: :direct
 
   defp set_status(%{status: status} = state, status), do: state
 

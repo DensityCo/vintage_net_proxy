@@ -55,10 +55,10 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
   end
 
   describe "PAC fetch from a real HTTP server" do
-    test "fetches the WPAD and publishes :auto", %{iface: iface} do
+    test "fetches the WPAD and publishes {:auto, :ready}", %{iface: iface} do
       configure_auto(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
       assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
     end
 
@@ -72,7 +72,7 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
 
       flush(iface)
 
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
     end
   end
 
@@ -131,7 +131,7 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
       PropertyTable.put(VintageNet, ["interface", iface, "connection"], :internet)
       flush(iface)
       assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
     end
   end
 
@@ -165,7 +165,7 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
       :ok
     end
 
-    test "a `bound` event with `wpad` flows end-to-end to :auto", %{iface: iface} do
+    test "a `bound` event with `wpad` flows end-to-end to {:auto, :ready}", %{iface: iface} do
       # :auto intent without an explicit pac_url — forces us to depend on
       # the wpad URL arriving from DHCP.
       PropertyTable.put(VintageNet, ["interface", iface, "config"], %{
@@ -194,7 +194,7 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
       status = VintageNetProxy.status().by_interface[iface]
       assert status.dhcp_wpad_url == @wpad_url
       assert status.pac_loaded? == true
-      assert VintageNet.get(["proxy", "config"]) == :auto
+      assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://www.google.com/") ==
                %{scheme: :http, host: @proxy_host, port: @proxy_port}
