@@ -16,9 +16,14 @@ defmodule VintageNetProxy.PAC do
     * `localHostOrDomainIs(host, "<hostdom>")` — matches the
       fully-qualified `hostdom`, or `host` when it's the unqualified
       form of `hostdom`
-    * `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
+    * `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only
     * `isInNet(myIpAddress(), "<net>", "<mask>")` — checks the device's
       own IPv4 (passed in via `:local_ip` on `find_proxy/3`)
+    * `isInNet(dnsResolve(host), "<net>", "<mask>")` — resolves the
+      URL's host via DNS before the subnet check; resolver is
+      supplied via `:resolver` on `find_proxy/3` (defaults to
+      `VintageNetProxy.PAC.DNS.resolve/1`)
+    * `isResolvable(host)` — true if `host` resolves to any IP
     * `host == "<literal>"` / `host === "<literal>"`
 
   Directives supported:
@@ -80,9 +85,13 @@ defmodule VintageNetProxy.PAC do
       subnet-aware routing). When absent or `nil`, `myIpAddress()`
       evaluates to "no IP," `isInNet` returns false, and the rule
       falls through.
+    * `:resolver` — function used by `dnsResolve` / `isResolvable`.
+      Signature `(String.t() -> {:ok, String.t()} | :error)`.
+      Defaults to `&VintageNetProxy.PAC.DNS.resolve/1`, which uses
+      `:inet_res` with a 500ms timeout and an ETS-backed cache.
 
-  Future context (DNS resolver, wallclock for `weekdayRange`, etc.)
-  will slot into the same opts.
+  Future context (wallclock for `weekdayRange`, etc.) slots into the
+  same opts.
   """
   @spec find_proxy(String.t(), String.t(), keyword()) :: result()
   def find_proxy(script, url, opts \\ [])

@@ -6,9 +6,13 @@ defmodule VintageNetProxy.Supervisor do
 
     1. `VintageNetProxy.InterfaceRegistry` — registry that maps an iface
        name to its `Interface` GenServer.
-    2. `VintageNetProxy.Selector` — aggregates per-interface snapshots and
+    2. `VintageNetProxy.PAC.DNS` — DNS cache for PAC's `dnsResolve` /
+       `isResolvable` functions. Owns a named ETS table that any
+       process can read from directly; reads bypass the GenServer
+       mailbox so they don't serialize.
+    3. `VintageNetProxy.Selector` — aggregates per-interface snapshots and
        publishes the chosen proxy value.
-    3. An internal interface supervisor — one `Interface` GenServer
+    4. An internal interface supervisor — one `Interface` GenServer
        per configured interface, supervised `:one_for_one` so a crash in
        one interface doesn't disturb the others.
 
@@ -28,6 +32,7 @@ defmodule VintageNetProxy.Supervisor do
   use Supervisor
 
   alias VintageNetProxy.{InterfaceSupervisor, Selector}
+  alias VintageNetProxy.PAC
 
   def start_link(opts \\ []) do
     Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
@@ -39,6 +44,7 @@ defmodule VintageNetProxy.Supervisor do
 
     children = [
       {Registry, keys: :unique, name: VintageNetProxy.InterfaceRegistry},
+      PAC.DNS,
       {Selector, interfaces: interfaces},
       {InterfaceSupervisor, interfaces: interfaces}
     ]

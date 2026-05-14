@@ -11,9 +11,13 @@ defmodule VintageNetProxy.PAC.Predicate do
     * `localHostOrDomainIs(host, "hostdom")` — matches `host` if it
       equals `hostdom` *or* if `host` is the unqualified version
       (`intranet` matches `intranet.corp.example`)
-    * `isInNet(host, "network", "mask")` — IP-literal hosts only (no DNS)
+    * `isInNet(host, "network", "mask")` — IP-literal hosts only
     * `isInNet(myIpAddress(), "network", "mask")` — checks the device's
       own IP (supplied by the caller via `:local_ip`)
+    * `isInNet(dnsResolve(host), "network", "mask")` — resolves the
+      URL's host via DNS first (the canonical PAC pattern for
+      bypassing the proxy on internal subnets)
+    * `isResolvable(host)` — true if `host` resolves to any IP
     * `host == "literal"` / `host === "literal"`
 
   Parse errors and unsupported atoms evaluate to false. That matches
@@ -38,10 +42,15 @@ defmodule VintageNetProxy.PAC.Predicate do
       string. Used by `myIpAddress()` inside `isInNet(myIpAddress(), …)`.
       Defaults to `nil` (no IP available → `myIpAddress()` resolves
       to "no IP" and the wrapping `isInNet` falls through).
+    * `:resolver` — function used to evaluate `dnsResolve` /
+      `isResolvable`. Signature `(String.t() -> {:ok, String.t()} |
+      :error)`. Defaults to `&VintageNetProxy.PAC.DNS.resolve/1`,
+      which itself returns `:error` when the cache GenServer isn't
+      running (so tests that don't bring up DNS get graceful
+      fall-through without having to stub).
 
-  Future context (DNS resolver, wallclock for `weekdayRange`, etc.)
-  slots into the same opts shape; test sites pass only the keys they
-  need.
+  Future context (wallclock for `weekdayRange`, etc.) slots into the
+  same opts shape.
 
   Parse errors and unsupported atoms evaluate to false.
   """
@@ -50,7 +59,8 @@ defmodule VintageNetProxy.PAC.Predicate do
     ctx = %{
       host: Keyword.get(opts, :host, ""),
       url: Keyword.get(opts, :url, ""),
-      local_ip: Keyword.get(opts, :local_ip)
+      local_ip: Keyword.get(opts, :local_ip),
+      resolver: Keyword.get(opts, :resolver, &VintageNetProxy.PAC.DNS.resolve/1)
     }
 
     with {:ok, tokens} <- tokenize(expr, []),
@@ -214,22 +224,41 @@ defmodule VintageNetProxy.PAC.Predicate do
     end
   end
 
+  defp call("isResolvable", [{:ident, "host"}], %{host: host, resolver: resolver}),
+    do: match?({:ok, _}, resolver.(host))
+
+  defp call("isResolvable", [{:str, hostname}], %{resolver: resolver}),
+    do: match?({:ok, _}, resolver.(hostname))
+
   defp call(_, _, _), do: false
 
   # Reduce an `isInNet` first-argument expression to a dotted-quad
-  # string. Two shapes real WPADs use:
+  # string. Three shapes real WPADs use:
   #
   #   * `isInNet(host, …)` — the literal identifier `host`; use the
   #     host extracted from the URL.
   #   * `isInNet(myIpAddress(), …)` — the device's own IP, supplied
   #     by the caller via `ctx.local_ip`. Returns `nil` if no local
-  #     IP is available (interface down, IPv6-only, etc.), which
-  #     makes `isInNet` evaluate to false and the rule fall through.
+  #     IP is available (interface down, IPv6-only, etc.).
+  #   * `isInNet(dnsResolve(host), …)` — resolve the URL's host via
+  #     DNS. Returns `nil` on resolution failure.
+  #
+  # `nil` makes the wrapping `isInNet` evaluate to false and the rule
+  # fall through.
   defp resolve_to_ip({:ident, "host"}, %{host: host}), do: host
 
   defp resolve_to_ip({:call, "myIpAddress", []}, %{local_ip: ip}) when is_binary(ip), do: ip
 
+  defp resolve_to_ip({:call, "dnsResolve", [{:ident, "host"}]}, %{host: host, resolver: r}),
+    do: ok_or_nil(r.(host))
+
+  defp resolve_to_ip({:call, "dnsResolve", [{:str, hostname}]}, %{resolver: r}),
+    do: ok_or_nil(r.(hostname))
+
   defp resolve_to_ip(_, _), do: nil
+
+  defp ok_or_nil({:ok, ip}), do: ip
+  defp ok_or_nil(_), do: nil
 
   defp glob_match?(string, pattern) do
     regex =

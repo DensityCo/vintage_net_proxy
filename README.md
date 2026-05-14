@@ -528,8 +528,9 @@ debugging or external inspection.
     VintageNet's `addresses` property into the dotted-quad string
     PAC's `myIpAddress()` needs.
 
-  * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP` — the PAC
-    script evaluator (see "PAC subset" below).
+  * `VintageNetProxy.PAC`, `PAC.Predicate`, `PAC.IP`, `PAC.DNS` — the
+    PAC script evaluator (see "PAC subset" below). `PAC.DNS` owns an
+    ETS-backed DNS cache used by `dnsResolve` / `isResolvable`.
 
   * `VintageNetProxy.Connectivity`, `Connectivity.Probe` — the
     optional connectivity checker; lives outside the main supervision
@@ -602,13 +603,21 @@ WPAD scripts.
 - `localHostOrDomainIs(host, "<hostdom>")` — matches the
   fully-qualified `hostdom`, or `host` when it's the unqualified
   form of `hostdom` (e.g. `intranet` matches `intranet.corp.example`)
-- `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
+- `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only
 - `isInNet(myIpAddress(), "<net>", "<mask>")` — checks the device's
   own IPv4 address, taken from the active interface's `addresses`
   property. Common pattern for subnet-aware routing: "if I'm on
   10.1.x.x, use site-A proxy; on 10.2.x.x, use site-B." When no
   IPv4 address is available (interface down, IPv6-only lease) the
   predicate evaluates to false and the rule falls through.
+- `isInNet(dnsResolve(host), "<net>", "<mask>")` — resolves the
+  URL's host via DNS (or `:inet_res.lookup/4`, with a 500ms
+  timeout) before the subnet check. The canonical "bypass internal
+  subnets" pattern. Resolutions are cached for 60s on hits / 10s
+  on misses by `VintageNetProxy.PAC.DNS`. A failed lookup returns
+  `:error` and the rule falls through.
+- `isResolvable(host)` — true when the host resolves through the
+  same cached resolver.
 - `host == "<literal>"` / `host === "<literal>"`
 
 **Boolean composition:** `||`, `&&`, `!`, and parentheses. Standard
@@ -627,15 +636,17 @@ Anything outside this subset (unsupported atom, malformed predicate, parse
 error) evaluates to false and the rule falls through. Malformed scripts
 return `:direct`.
 
-`isInNet` deliberately matches only when `host` is already an IPv4
-literal — embedding DNS resolution inside PAC evaluation would make proxy
-lookup network-dependent. Real-world WPADs typically gate the IP arm with
-`isPlainHostName(host) || isInNet(host, ...)`, which works correctly under
-this rule.
+DNS-resolving variants (`dnsResolve`, `isResolvable`, and
+`isInNet(dnsResolve(host), ...)`) use a cached resolver
+(`VintageNetProxy.PAC.DNS`) with a 500ms per-call timeout. Resolutions
+hit `:inet_res.lookup/4` directly (bypassing the OS resolver and
+`/etc/hosts`); IPv4 literals short-circuit without touching DNS or the
+cache. The cache GenServer lives in the main supervision tree; when
+it isn't running (unit tests), the resolver returns `:error` so
+predicates fall through gracefully without crashing.
 
-If real-world PAC files need more (DNS-resolving `isInNet`, `myIpAddress`,
-`weekdayRange`, credential parsing, etc.), extend
-`VintageNetProxy.PAC.Predicate`.
+If real-world PAC files need more (`weekdayRange`, IPv6 variants,
+credential parsing, etc.), extend `VintageNetProxy.PAC.Predicate`.
 
 ## Why no Duktape / PACrunner
 

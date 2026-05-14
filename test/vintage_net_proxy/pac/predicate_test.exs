@@ -289,9 +289,80 @@ defmodule VintageNetProxy.PAC.PredicateTest do
     end
   end
 
+  describe "isResolvable / dnsResolve" do
+    test "isResolvable returns true when the resolver succeeds" do
+      resolver = fn _ -> {:ok, "10.0.0.5"} end
+      assert Predicate.eval("isResolvable(host)", host: "foo.corp", resolver: resolver)
+    end
+
+    test "isResolvable returns false when the resolver fails" do
+      resolver = fn _ -> :error end
+      refute Predicate.eval("isResolvable(host)", host: "foo.corp", resolver: resolver)
+    end
+
+    test "isResolvable accepts a string literal" do
+      resolver = fn "explicit.corp" -> {:ok, "10.0.0.7"} end
+
+      assert Predicate.eval(~s|isResolvable("explicit.corp")|,
+               host: "ignored",
+               resolver: resolver
+             )
+    end
+
+    test "isInNet(dnsResolve(host), …) routes through the resolver" do
+      bypass = fn "intranet.corp" -> {:ok, "10.1.2.3"} end
+
+      assert Predicate.eval(
+               ~s|isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0")|,
+               host: "intranet.corp",
+               resolver: bypass
+             )
+    end
+
+    test "isInNet(dnsResolve(host), …) returns false when the host doesn't resolve" do
+      resolver = fn _ -> :error end
+
+      refute Predicate.eval(
+               ~s|isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0")|,
+               host: "anywhere.example",
+               resolver: resolver
+             )
+    end
+
+    test "isInNet(dnsResolve(host), …) returns false when the resolved IP isn't in the subnet" do
+      resolver = fn _ -> {:ok, "8.8.8.8"} end
+
+      refute Predicate.eval(
+               ~s|isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0")|,
+               host: "google-dns",
+               resolver: resolver
+             )
+    end
+
+    test "isInNet(dnsResolve(\"literal\"), …) resolves the string literal" do
+      resolver = fn "wpad.corp" -> {:ok, "10.1.0.1"} end
+
+      assert Predicate.eval(
+               ~s|isInNet(dnsResolve("wpad.corp"), "10.0.0.0", "255.0.0.0")|,
+               host: "ignored",
+               resolver: resolver
+             )
+    end
+
+    test "default resolver returns :error when no cache is running — rule falls through" do
+      # No :resolver opt → uses PAC.DNS.resolve, which falls back to
+      # :error when the cache GenServer isn't running (which it isn't
+      # in this test). The isInNet wrapper then evaluates to false.
+      refute Predicate.eval(
+               ~s|isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0")|,
+               host: "intranet.corp"
+             )
+    end
+  end
+
   describe "error handling" do
     test "unsupported atom evaluates to false" do
-      refute Predicate.eval(~s|dnsResolve(host) == "10.0.0.1"|, host: "intranet")
+      refute Predicate.eval(~s|weekdayRange("MON", "FRI")|, host: "intranet")
     end
 
     test "unbalanced parens — falls through to false" do

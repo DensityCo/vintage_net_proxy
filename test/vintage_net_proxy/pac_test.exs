@@ -491,4 +491,54 @@ defmodule VintageNetProxy.PACTest do
       assert PAC.find_proxy(script, "not-a-url") == {:ok, :direct}
     end
   end
+
+  describe "find_proxy/3 — :resolver threading" do
+    @subnet_bypass """
+    function FindProxyForURL(url, host) {
+      if (isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0")) return "DIRECT";
+      return "PROXY p.corp:8080";
+    }
+    """
+
+    test "host that resolves into the bypass subnet → DIRECT" do
+      resolver = fn "intranet.corp" -> {:ok, "10.1.2.3"} end
+
+      assert PAC.find_proxy(@subnet_bypass, "http://intranet.corp/", resolver: resolver) ==
+               {:ok, :direct}
+    end
+
+    test "host that resolves outside the bypass subnet → proxy" do
+      resolver = fn _ -> {:ok, "8.8.8.8"} end
+
+      assert PAC.find_proxy(@subnet_bypass, "http://anything.example/", resolver: resolver) ==
+               {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
+    end
+
+    test "host that fails to resolve → rule falls through to default proxy" do
+      resolver = fn _ -> :error end
+
+      assert PAC.find_proxy(@subnet_bypass, "http://unresolvable.invalid/", resolver: resolver) ==
+               {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
+    end
+
+    test "no :resolver supplied → default PAC.DNS.resolve/1 returns :error (cache not running) → default proxy" do
+      assert PAC.find_proxy(@subnet_bypass, "http://intranet.corp/") ==
+               {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
+    end
+
+    test "isResolvable in a rule routes through the resolver" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (isResolvable(host)) return "PROXY p:1";
+        return "DIRECT";
+      }
+      """
+
+      assert PAC.find_proxy(script, "http://x.corp/", resolver: fn _ -> {:ok, "1.2.3.4"} end) ==
+               {:ok, %{scheme: :http, host: "p", port: 1}}
+
+      assert PAC.find_proxy(script, "http://x.corp/", resolver: fn _ -> :error end) ==
+               {:ok, :direct}
+    end
+  end
 end
