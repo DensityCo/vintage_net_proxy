@@ -188,22 +188,14 @@ defmodule VintageNetProxy.ConnectivityTest do
       assert Connectivity.check_now() == {:error, :socks_not_supported}
     end
 
-    test "{:auto, {:error, _}} → falls back to a direct probe" do
+    test "{:auto, :no_pac} → falls back to a direct probe" do
       port = accepting_target()
-      PropertyTable.put(VintageNet, @config_property, {:auto, {:error, :nxdomain}})
+      PropertyTable.put(VintageNet, @config_property, {:auto, :no_pac})
       start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
 
       # The direct probe to 127.0.0.1:port succeeds; the value just says
       # "we couldn't resolve a proxy" — Probe falls back to direct so the
       # connectivity status honestly reflects what's reachable.
-      assert Connectivity.check_now() == :ok
-    end
-
-    test "{:auto, :no_url} → falls back to a direct probe" do
-      port = accepting_target()
-      PropertyTable.put(VintageNet, @config_property, {:auto, :no_url})
-      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
-
       assert Connectivity.check_now() == :ok
     end
 
@@ -219,7 +211,7 @@ defmodule VintageNetProxy.ConnectivityTest do
 
       pac = ~s|function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:#{proxy_port}"; }|
 
-      snap = %VintageNetProxy.Interface.Routing{
+      snap = %VintageNetProxy.Interface.Proxy{
         iface: iface,
         intent: %{mode: :auto},
         connection: :internet,

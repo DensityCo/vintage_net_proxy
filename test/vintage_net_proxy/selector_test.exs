@@ -8,7 +8,7 @@ defmodule VintageNetProxy.SelectorTest do
   use ExUnit.Case, async: false
 
   alias VintageNetProxy.{Publisher, Selector}
-  alias VintageNetProxy.Interface.Routing
+  alias VintageNetProxy.Interface.Proxy
 
   setup do
     uniq = :erlang.unique_integer([:positive])
@@ -26,12 +26,11 @@ defmodule VintageNetProxy.SelectorTest do
   end
 
   defp send_snapshot(iface, opts) do
-    snap = %Routing{
+    snap = %Proxy{
       iface: iface,
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection),
       pac_script: Keyword.get(opts, :pac_script),
-      pac_fetch_error: Keyword.get(opts, :pac_fetch_error),
       dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url)
     }
 
@@ -71,21 +70,10 @@ defmodule VintageNetProxy.SelectorTest do
       assert Publisher.get() == {:auto, :ready}
     end
 
-    test "publishes {:auto, :no_url} when :auto snapshot has no script, no error, no URL source",
+    test "publishes {:auto, :no_pac} when :auto snapshot has no script",
          %{primary: iface} do
       send_snapshot(iface, intent: %{mode: :auto}, connection: :internet)
-      assert Publisher.get() == {:auto, :no_url}
-    end
-
-    test "publishes {:auto, {:error, reason}} when :auto snapshot has a fetch error",
-         %{primary: iface} do
-      send_snapshot(iface,
-        intent: %{mode: :auto},
-        connection: :internet,
-        pac_fetch_error: :nxdomain
-      )
-
-      assert Publisher.get() == {:auto, {:error, :nxdomain}}
+      assert Publisher.get() == {:auto, :no_pac}
     end
   end
 

@@ -55,7 +55,7 @@ collapsed onto `:unset`:
 | `:direct` | Direct mode; bypass any proxy |
 | `{:manual, descriptor}` | Explicit proxy from manual mode |
 | `{:auto, :ready}` | PAC loaded; call `VintageNetProxy.resolve(url)` per request |
-| `{:auto, {:error, reason}}` | PAC fetch failed; sticks until the URL changes, the interface flaps, or the next external event re-fetches |
+| `{:auto, :no_pac}` | Auto mode but no PAC script loaded — either no URL has been advertised yet, or the last fetch failed (see `VintageNetProxy.Fetcher` logs) |
 
 PAC is inherently per-URL, so under `{:auto, :ready}` the library does
 not compress the script down to a single descriptor. The published
@@ -93,8 +93,7 @@ defp connect(url) do
     {:ok, :direct}                   -> direct_connect(url)
     {:ok, %{} = descriptor}          -> proxied_connect(url, descriptor)
     {:error, :pac_fallthrough}       -> alert_or_wait()       # script is malformed
-    {:error, :no_pac_url}            -> wait_for_dhcp()
-    {:error, {:pac_fetch_failed, _}} -> wait_or_alert()
+    {:error, :no_pac}                -> wait_for_dhcp()        # no script (yet, or last fetch failed)
     {:error, :no_proxy_resolved}     -> wait_for_interface()
   end
 end
@@ -129,7 +128,7 @@ def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
     :direct                 -> {:noreply, reconnect(state, :direct)}
     {:manual, descriptor}   -> {:noreply, reconnect(state, descriptor)}
     {:auto, :ready}         -> {:noreply, reconnect(state, :auto)}
-    {:auto, {:error, _}}    -> {:noreply, alert_or_hold(state)}
+    {:auto, :no_pac}        -> {:noreply, hold(state)}
   end
 end
 ```
@@ -347,7 +346,7 @@ domains, so a single-vendor outage doesn't take everyone down. Set
     working end-to-end.
   * For `{:auto, :ready}` — `resolve/1` is called against the probe URL
     to get a concrete decision, then dispatched as above.
-  * For `{:auto, {:error, _}}` — falls back to a direct probe so the
+  * For `{:auto, :no_pac}` — falls back to a direct probe so the
     connectivity status honestly reports whether the device can reach
     anything (the answer is usually "no" behind a firewall, which is
     the truthful signal).

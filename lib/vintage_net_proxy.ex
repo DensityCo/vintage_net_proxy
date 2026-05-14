@@ -16,12 +16,12 @@ defmodule VintageNetProxy do
     * `:direct` — direct mode; bypass any proxy
     * `{:manual, descriptor}` — explicit proxy from manual mode
     * `{:auto, :ready}` — PAC loaded; call `resolve/1` per request
-    * `{:auto, :no_url}` — auto mode but no PAC URL is available
-      (no `:pac_url`, no DHCP wpad, no DHCP domain). Stays here until
-      the network advertises something to fetch.
-    * `{:auto, {:error, reason}}` — PAC fetch failed; the cached
-      failure stays until something invalidates it (URL changes,
-      interface flaps, next external event re-fetches)
+    * `{:auto, :no_pac}` — auto mode but no PAC script is currently
+      loaded. Either no URL has been advertised yet (no `:pac_url`,
+      no DHCP wpad, no DHCP domain) or the last fetch attempt failed
+      — `VintageNetProxy.Fetcher` logs the specific reason. The next
+      PropertyTable event that changes the effective URL will trigger
+      another fetch attempt.
 
   PAC is inherently per-URL, so under `{:auto, :ready}` the library
   does *not* compress the script down to a single answer. Consumers
@@ -37,8 +37,7 @@ defmodule VintageNetProxy do
           :direct                -> {:noreply, connect_direct(state)}
           {:manual, desc}        -> {:noreply, connect_via(state, desc)}
           {:auto, :ready}        -> {:noreply, state}  # call resolve(url) per request
-          {:auto, :no_url}       -> {:noreply, wait_for_network(state)}
-          {:auto, {:error, _}}   -> {:noreply, alert_or_wait(state)}
+          {:auto, :no_pac}       -> {:noreply, wait_for_network(state)}
         end
       end
 
@@ -129,8 +128,7 @@ defmodule VintageNetProxy do
           | :direct
           | {:manual, proxy_descriptor()}
           | {:auto, :ready}
-          | {:auto, :no_url}
-          | {:auto, {:error, term()}}
+          | {:auto, :no_pac}
 
   @type resolved :: :direct | proxy_descriptor()
 
@@ -185,10 +183,9 @@ defmodule VintageNetProxy do
       rule *and* had no extractable default. Malformed script or
       syntax this evaluator silently skips. `VintageNetProxy.PAC`
       logs at `:warning` when this happens.
-    * `:no_pac_url` — auto mode but no `:pac_url`, no DHCP wpad, no
-      DHCP domain.
-    * `{:pac_fetch_failed, reason}` — auto mode, the last fetch
-      attempt failed.
+    * `:no_pac` — auto mode but no PAC script is currently loaded
+      (no URL source yet, or the last fetch attempt failed —
+      `VintageNetProxy.Fetcher` logs the specific reason).
     * `:no_proxy_resolved` — no eligible interface (no intent, or
       none up).
 

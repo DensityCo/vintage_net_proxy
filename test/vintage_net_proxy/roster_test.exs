@@ -4,15 +4,14 @@ defmodule VintageNetProxy.RosterTest do
   import ExUnit.CaptureLog
 
   alias VintageNetProxy.Roster
-  alias VintageNetProxy.Interface.Routing
+  alias VintageNetProxy.Interface.Proxy
 
   defp iface(opts) do
-    %Routing{
+    %Proxy{
       iface: Keyword.fetch!(opts, :iface),
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection, :disconnected),
       pac_script: Keyword.get(opts, :pac_script),
-      pac_fetch_error: Keyword.get(opts, :pac_fetch_error),
       dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url)
     }
   end
@@ -64,23 +63,9 @@ defmodule VintageNetProxy.RosterTest do
       assert Roster.value(s) == {:auto, :ready}
     end
 
-    test "eligible :auto without script, error, or URL source → {:auto, :no_url}" do
+    test "eligible :auto without a script → {:auto, :no_pac}" do
       s = state([iface(iface: "eth0", intent: %{mode: :auto}, connection: :internet)])
-      assert Roster.value(s) == {:auto, :no_url}
-    end
-
-    test "eligible :auto with a fetch error → {:auto, {:error, reason}}" do
-      s =
-        state([
-          iface(
-            iface: "eth0",
-            intent: %{mode: :auto},
-            connection: :internet,
-            pac_fetch_error: :timeout
-          )
-        ])
-
-      assert Roster.value(s) == {:auto, {:error, :timeout}}
+      assert Roster.value(s) == {:auto, :no_pac}
     end
   end
 
