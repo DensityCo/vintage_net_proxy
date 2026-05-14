@@ -1,12 +1,13 @@
-defmodule VintageNetProxy.Config do
+defmodule VintageNetProxy.Intent do
   @moduledoc """
-  Canonical proxy configuration schema.
+  The user's proxy intent: schema, validator, type, and helpers.
 
   Proxy intent is expressed as a `:proxy` field inside a VintageNet
-  interface configuration map. The proxy library reads that intent from
-  `["interface", ifname, "config"]` in the property table and combines
-  it with DHCP-supplied information (Option 252 / WPAD) to produce the
-  resolved proxy published at `["proxy", "config"]`.
+  interface configuration map. The library reads that field from
+  `["interface", ifname, "config"]`, normalizes it through this
+  module, and combines the result with DHCP-supplied information
+  (Option 252 / WPAD) to produce the resolved proxy published at
+  `["proxy", "config"]`.
 
   ## Modes
 
@@ -81,14 +82,28 @@ defmodule VintageNetProxy.Config do
           optional(:bypass) => [String.t()]
         }
 
+  @typedoc "A normalized proxy intent."
   @type t :: direct() | auto() | manual()
 
-  @doc """
-  Validate and normalize a proxy configuration map.
+  @typedoc """
+  The runtime proxy descriptor published on `["proxy", "config"]`. A
+  `:manual` intent stripped of config-only fields (`:mode`, `:bypass`).
+  """
+  @type descriptor :: %{
+          required(:scheme) => scheme(),
+          required(:host) => String.t(),
+          required(:port) => pos_integer(),
+          optional(:username) => String.t(),
+          optional(:password) => String.t()
+        }
 
-  Returns `{:ok, normalized}` for valid input or `{:error, reason}` for
-  invalid input. Normalization fills in defaults (e.g., `:scheme` defaults
-  to `:http` for manual configurations) and strips unknown keys.
+  @doc """
+  Validate and normalize a `:proxy` configuration map.
+
+  Returns `{:ok, intent}` for valid input or `{:error, reason}` for
+  invalid input. Normalization fills in defaults (e.g., `:scheme`
+  defaults to `:http` for manual configurations) and strips unknown
+  keys.
   """
   @spec normalize(map()) :: {:ok, t()} | {:error, String.t()}
   def normalize(config) when is_map(config) do
@@ -114,11 +129,35 @@ defmodule VintageNetProxy.Config do
     end
   end
 
-  @doc """
-  Returns the list of valid proxy schemes.
-  """
+  @doc "Valid proxy schemes."
   @spec schemes() :: [scheme()]
   def schemes, do: @schemes
+
+  @doc """
+  Extract the normalized intent from a VintageNet interface config map.
+
+  Returns:
+
+    * `{:ok, intent}` — valid `:proxy` field present.
+    * `{:ok, nil}` — no `:proxy` field, or input isn't a map. Not an
+      error: "no proxy intent" is a legitimate state.
+    * `{:error, reason}` — `:proxy` is present but invalid. The shell
+      is expected to log this.
+  """
+  @spec from_vintage_net_config(term()) :: {:ok, t() | nil} | {:error, String.t()}
+  def from_vintage_net_config(%{proxy: raw}) when is_map(raw), do: normalize(raw)
+  def from_vintage_net_config(_), do: {:ok, nil}
+
+  @doc """
+  Convert a `:manual` intent into the runtime proxy descriptor
+  published on `["proxy", "config"]`.
+
+  Strips config-only fields (`:mode`, `:bypass`) and keeps the
+  scheme/host/port plus any credentials.
+  """
+  @spec to_descriptor(manual()) :: descriptor()
+  def to_descriptor(%{mode: :manual} = intent),
+    do: Map.take(intent, [:scheme, :host, :port, :username, :password])
 
   defp normalize_auto(config) do
     case Map.get(config, :pac_url) do
@@ -202,24 +241,5 @@ defmodule VintageNetProxy.Config do
       other ->
         {:error, ":bypass must be a list of strings, got #{inspect(other)}"}
     end
-  end
-
-  @doc """
-  Convert a `:manual` config into the runtime proxy descriptor published
-  on the property table.
-
-  Strips out config-only fields (`:mode`, `:bypass`) and keeps the
-  scheme/host/port plus any credentials.
-  """
-  @spec to_descriptor(manual()) :: %{
-          required(:scheme) => scheme(),
-          required(:host) => String.t(),
-          required(:port) => pos_integer(),
-          optional(:username) => String.t(),
-          optional(:password) => String.t()
-        }
-  def to_descriptor(%{mode: :manual} = config) do
-    config
-    |> Map.take([:scheme, :host, :port, :username, :password])
   end
 end

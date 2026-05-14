@@ -1,19 +1,20 @@
-defmodule VintageNetProxy.InterfaceTest do
+defmodule VintageNetProxy.Interface.RoutingTest do
   @moduledoc """
-  Pure-helper tests for the `Interface` struct. The GenServer behavior is
-  exercised end-to-end through `VintageNetProxyTest`.
+  Pure-function tests for the per-interface routing struct. The
+  GenServer behavior is exercised end-to-end through
+  `VintageNetProxyTest`.
   """
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 
-  alias VintageNetProxy.Interface
+  alias VintageNetProxy.Interface.Routing
 
   # Helper used by tests that want to swallow PAC's :pac_fallthrough warning.
   defp silently(fun), do: capture_log(fun)
 
   defp iface(opts) do
-    %Interface{
+    %Routing{
       iface: Keyword.get(opts, :iface, "eth0"),
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection, :disconnected),
@@ -27,57 +28,57 @@ defmodule VintageNetProxy.InterfaceTest do
 
   describe "eligible?/1" do
     test "intent nil → false" do
-      refute Interface.eligible?(iface(intent: nil, connection: :internet))
+      refute Routing.eligible?(iface(intent: nil, connection: :internet))
     end
 
     test "connection :disconnected → false" do
-      refute Interface.eligible?(iface(intent: %{mode: :direct}, connection: :disconnected))
+      refute Routing.eligible?(iface(intent: %{mode: :direct}, connection: :disconnected))
     end
 
     test "intent + connection :internet → true" do
-      assert Interface.eligible?(iface(intent: %{mode: :direct}, connection: :internet))
+      assert Routing.eligible?(iface(intent: %{mode: :direct}, connection: :internet))
     end
 
     test "intent + connection :lan → true" do
-      assert Interface.eligible?(iface(intent: %{mode: :direct}, connection: :lan))
+      assert Routing.eligible?(iface(intent: %{mode: :direct}, connection: :lan))
     end
   end
 
   describe "value/1" do
     test "intent nil → :unset" do
-      assert Interface.value(iface(intent: nil)) == :unset
+      assert Routing.value(iface(intent: nil)) == :unset
     end
 
     test ":direct → :direct" do
-      assert Interface.value(iface(intent: %{mode: :direct})) == :direct
+      assert Routing.value(iface(intent: %{mode: :direct})) == :direct
     end
 
     test ":manual → {:manual, descriptor}" do
       intent = %{mode: :manual, scheme: :http, host: "p", port: 8080}
 
-      assert Interface.value(iface(intent: intent)) ==
+      assert Routing.value(iface(intent: intent)) ==
                {:manual, %{scheme: :http, host: "p", port: 8080}}
     end
 
     test ":auto with pac_script → {:auto, :ready}" do
-      assert Interface.value(iface(intent: %{mode: :auto}, pac_script: "FN")) ==
+      assert Routing.value(iface(intent: %{mode: :auto}, pac_script: "FN")) ==
                {:auto, :ready}
     end
 
     test ":auto with no script, no error, no URL source → {:auto, :no_url}" do
-      assert Interface.value(iface(intent: %{mode: :auto})) == {:auto, :no_url}
+      assert Routing.value(iface(intent: %{mode: :auto})) == {:auto, :no_url}
     end
 
     test ":auto with no script and a fetch error → {:auto, {:error, reason}}" do
       state = iface(intent: %{mode: :auto}, pac_fetch_error: :timeout)
-      assert Interface.value(state) == {:auto, {:error, :timeout}}
+      assert Routing.value(state) == {:auto, {:error, :timeout}}
     end
 
     test ":auto with a script wins over a stale fetch error" do
       state =
         iface(intent: %{mode: :auto}, pac_script: "FN", pac_fetch_error: :previously_failed)
 
-      assert Interface.value(state) == {:auto, :ready}
+      assert Routing.value(state) == {:auto, :ready}
     end
   end
 
@@ -88,80 +89,80 @@ defmodule VintageNetProxy.InterfaceTest do
     @pac_rule_proxy ~s|function FindProxyForURL(url, host) { if (host == "x.example") return "PROXY q:1"; return "DIRECT"; }|
 
     test "manual :direct mode → {:ok, :direct}" do
-      assert Interface.resolve(iface(intent: %{mode: :direct}), "https://x/") == {:ok, :direct}
+      assert Routing.resolve(iface(intent: %{mode: :direct}), "https://x/") == {:ok, :direct}
     end
 
     test "manual descriptor → {:ok, descriptor}" do
       intent = %{mode: :manual, scheme: :http, host: "p", port: 80}
 
-      assert Interface.resolve(iface(intent: intent), "https://x/") ==
+      assert Routing.resolve(iface(intent: intent), "https://x/") ==
                {:ok, %{scheme: :http, host: "p", port: 80}}
     end
 
     test "PAC rule returning a proxy → {:ok, descriptor}" do
       state = iface(intent: %{mode: :auto}, pac_script: @pac_rule_proxy)
 
-      assert Interface.resolve(state, "http://x.example/") ==
+      assert Routing.resolve(state, "http://x.example/") ==
                {:ok, %{scheme: :http, host: "q", port: 1}}
     end
 
     test "PAC rule returning DIRECT → {:ok, :direct} (intentional bypass)" do
       state = iface(intent: %{mode: :auto}, pac_script: @pac_rule_direct)
-      assert Interface.resolve(state, "http://x.example/") == {:ok, :direct}
+      assert Routing.resolve(state, "http://x.example/") == {:ok, :direct}
     end
 
     test "PAC default routing through a proxy → {:ok, descriptor}" do
       state = iface(intent: %{mode: :auto}, pac_script: @pac_default_proxy)
 
-      assert Interface.resolve(state, "http://anything/") ==
+      assert Routing.resolve(state, "http://anything/") ==
                {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
     test "PAC default DIRECT → {:ok, :direct} (script said so)" do
       state = iface(intent: %{mode: :auto}, pac_script: @pac_default_direct)
-      assert Interface.resolve(state, "http://anything/") == {:ok, :direct}
+      assert Routing.resolve(state, "http://anything/") == {:ok, :direct}
     end
 
     test "PAC fall-through (empty script) → {:error, :pac_fallthrough}" do
       state = iface(intent: %{mode: :auto}, pac_script: "")
 
       silently(fn ->
-        assert Interface.resolve(state, "http://anything/") == {:error, :pac_fallthrough}
+        assert Routing.resolve(state, "http://anything/") == {:error, :pac_fallthrough}
       end)
     end
 
     test ":auto with no PAC URL → {:error, :no_pac_url}" do
-      assert Interface.resolve(iface(intent: %{mode: :auto}), "http://anything/") ==
+      assert Routing.resolve(iface(intent: %{mode: :auto}), "http://anything/") ==
                {:error, :no_pac_url}
     end
 
     test ":auto with a PAC fetch error → {:error, {:pac_fetch_failed, reason}}" do
       state = iface(intent: %{mode: :auto}, pac_fetch_error: :timeout)
 
-      assert Interface.resolve(state, "http://anything/") ==
+      assert Routing.resolve(state, "http://anything/") ==
                {:error, {:pac_fetch_failed, :timeout}}
     end
 
     test "no intent → {:error, :no_proxy_resolved}" do
-      assert Interface.resolve(iface(intent: nil), "http://anything/") ==
+      assert Routing.resolve(iface(intent: nil), "http://anything/") ==
                {:error, :no_proxy_resolved}
     end
   end
 
   describe "effective_pac_url/1" do
     test "nil when intent isn't :auto" do
-      assert Interface.effective_pac_url(iface(intent: %{mode: :direct}, connection: :internet)) ==
+      assert Routing.effective_pac_url(iface(intent: %{mode: :direct}, connection: :internet)) ==
                nil
     end
 
     test "nil when connection isn't up" do
       s = iface(intent: %{mode: :auto, pac_url: "http://x/"}, connection: :disconnected)
-      assert Interface.effective_pac_url(s) == nil
+      assert Routing.effective_pac_url(s) == nil
     end
 
     test "returns explicit :pac_url when :auto + connected" do
       s = iface(intent: %{mode: :auto, pac_url: "http://x/"}, connection: :internet)
-      assert Interface.effective_pac_url(s) == "http://x/"
+      assert Routing.effective_pac_url(s) == "http://x/"
     end
 
     test "falls back to DHCP wpad when :auto has no explicit pac_url" do
@@ -172,7 +173,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_wpad_url: "http://wpad/"
         )
 
-      assert Interface.effective_pac_url(s) == "http://wpad/"
+      assert Routing.effective_pac_url(s) == "http://wpad/"
     end
 
     test "explicit pac_url wins over DHCP wpad" do
@@ -183,7 +184,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_wpad_url: "http://wpad/"
         )
 
-      assert Interface.effective_pac_url(s) == "http://explicit/"
+      assert Routing.effective_pac_url(s) == "http://explicit/"
     end
 
     test "DNS-WPAD fallback constructs http://wpad.<domain>/wpad.dat from DHCP option 15" do
@@ -194,7 +195,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_domain: "corp.example.com"
         )
 
-      assert Interface.effective_pac_url(s) == "http://wpad.corp.example.com/wpad.dat"
+      assert Routing.effective_pac_url(s) == "http://wpad.corp.example.com/wpad.dat"
     end
 
     test "DHCP option 252 wpad wins over DNS-WPAD fallback" do
@@ -206,7 +207,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_domain: "corp.example.com"
         )
 
-      assert Interface.effective_pac_url(s) == "http://option252/wpad.dat"
+      assert Routing.effective_pac_url(s) == "http://option252/wpad.dat"
     end
 
     test "explicit pac_url wins over DNS-WPAD fallback" do
@@ -217,7 +218,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_domain: "corp.example.com"
         )
 
-      assert Interface.effective_pac_url(s) == "http://explicit/"
+      assert Routing.effective_pac_url(s) == "http://explicit/"
     end
 
     test "no DNS-WPAD when intent isn't :auto" do
@@ -228,7 +229,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_domain: "corp.example.com"
         )
 
-      assert Interface.effective_pac_url(s) == nil
+      assert Routing.effective_pac_url(s) == nil
     end
 
     test "no DNS-WPAD when domain is malformed (rejected by Wpad)" do
@@ -239,7 +240,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_domain: "http://evil.com/path"
         )
 
-      assert Interface.effective_pac_url(s) == nil
+      assert Routing.effective_pac_url(s) == nil
     end
   end
 
@@ -253,7 +254,7 @@ defmodule VintageNetProxy.InterfaceTest do
           dhcp_wpad_url: "http://wpad/",
           pac_script: "FN"
         )
-        |> Interface.snapshot()
+        |> Routing.snapshot()
 
       assert snap.iface == "eth0"
       assert snap.eligible? == true
@@ -268,7 +269,7 @@ defmodule VintageNetProxy.InterfaceTest do
     test "pac_url falls back to dhcp_wpad_url for :auto intent without explicit pac_url" do
       snap =
         iface(intent: %{mode: :auto}, dhcp_wpad_url: "http://wpad.test/")
-        |> Interface.snapshot()
+        |> Routing.snapshot()
 
       assert snap.pac_url == "http://wpad.test/"
     end
@@ -276,7 +277,7 @@ defmodule VintageNetProxy.InterfaceTest do
     test "pac_url is nil when intent isn't :auto" do
       snap =
         iface(intent: %{mode: :direct}, dhcp_wpad_url: "http://wpad.test/")
-        |> Interface.snapshot()
+        |> Routing.snapshot()
 
       assert snap.pac_url == nil
     end
@@ -284,7 +285,7 @@ defmodule VintageNetProxy.InterfaceTest do
     test "surfaces pac_fetch_error and the matching {:auto, {:error, _}} value" do
       snap =
         iface(intent: %{mode: :auto}, pac_fetch_error: :nxdomain)
-        |> Interface.snapshot()
+        |> Routing.snapshot()
 
       assert snap.pac_fetch_error == :nxdomain
       assert snap.value == {:auto, {:error, :nxdomain}}
@@ -292,12 +293,12 @@ defmodule VintageNetProxy.InterfaceTest do
     end
 
     test "surfaces local_ip when set" do
-      snap = iface(local_ip: "10.1.2.3") |> Interface.snapshot()
+      snap = iface(local_ip: "10.1.2.3") |> Routing.snapshot()
       assert snap.local_ip == "10.1.2.3"
     end
 
     test "local_ip is nil when no IP is available" do
-      snap = iface(intent: %{mode: :auto}) |> Interface.snapshot()
+      snap = iface(intent: %{mode: :auto}) |> Routing.snapshot()
       assert snap.local_ip == nil
     end
   end
@@ -314,7 +315,7 @@ defmodule VintageNetProxy.InterfaceTest do
       state =
         iface(intent: %{mode: :auto}, pac_script: @subnet_routing, local_ip: "10.1.5.10")
 
-      assert Interface.resolve(state, "https://target.example/") ==
+      assert Routing.resolve(state, "https://target.example/") ==
                {:ok, %{scheme: :http, host: "site-a", port: 8080}}
     end
 
@@ -322,14 +323,14 @@ defmodule VintageNetProxy.InterfaceTest do
       state =
         iface(intent: %{mode: :auto}, pac_script: @subnet_routing, local_ip: "192.168.1.5")
 
-      assert Interface.resolve(state, "https://target.example/") ==
+      assert Routing.resolve(state, "https://target.example/") ==
                {:ok, %{scheme: :http, host: "default", port: 8080}}
     end
 
     test "no local_ip falls to default (myIpAddress rules don't fire)" do
       state = iface(intent: %{mode: :auto}, pac_script: @subnet_routing)
 
-      assert Interface.resolve(state, "https://target.example/") ==
+      assert Routing.resolve(state, "https://target.example/") ==
                {:ok, %{scheme: :http, host: "default", port: 8080}}
     end
   end

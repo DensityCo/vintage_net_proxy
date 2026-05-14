@@ -1,57 +1,57 @@
 defmodule VintageNetProxy.Roster do
   @moduledoc """
-  Pure aggregator over per-interface snapshots.
+  Pure aggregator over per-interface routing.
 
-  Holds the priority list of interfaces plus `%{iface => Interface.t}`.
+  Holds the priority list of interfaces plus `%{iface => Routing.t}`.
   Knows how to find the active interface and compute the published
   `value/1`, the `resolve/2` result, and the `status/2` map. Used by
   the Selector — never spawns a process or touches the PropertyTable
   itself.
   """
 
-  alias VintageNetProxy.Interface
+  alias VintageNetProxy.Interface.Routing
 
   defstruct interfaces: [], states: %{}
 
   @type t :: %__MODULE__{
           interfaces: [String.t()],
-          states: %{optional(String.t()) => Interface.t()}
+          states: %{optional(String.t()) => Routing.t()}
         }
 
-  @doc "Build a new roster from the priority list and the per-iface states."
-  @spec new([String.t()], %{optional(String.t()) => Interface.t()}) :: t()
+  @doc "Build a new roster from the priority list and the per-iface routing."
+  @spec new([String.t()], %{optional(String.t()) => Routing.t()}) :: t()
   def new(interfaces, iface_states),
     do: %__MODULE__{interfaces: interfaces, states: iface_states}
 
   @doc """
-  Store the latest snapshot for `iface`. No-op if `iface` isn't in this
+  Store the latest routing for `iface`. No-op if `iface` isn't in this
   roster's priority list (interfaces outside the configured set are ignored).
   """
-  @spec put_iface(t(), String.t(), Interface.t()) :: t()
-  def put_iface(state, iface, iface_state) do
+  @spec put_iface(t(), String.t(), Routing.t()) :: t()
+  def put_iface(state, iface, routing) do
     if iface in state.interfaces do
-      %{state | states: Map.put(state.states, iface, iface_state)}
+      %{state | states: Map.put(state.states, iface, routing)}
     else
       state
     end
   end
 
   @doc """
-  Return the cached snapshot for `iface`, or `nil` if none has been
+  Return the cached routing for `iface`, or `nil` if none has been
   stored yet.
   """
-  @spec get_iface(t(), String.t()) :: Interface.t() | nil
+  @spec get_iface(t(), String.t()) :: Routing.t() | nil
   def get_iface(state, iface), do: Map.get(state.states, iface)
 
   @doc """
-  Apply `fun` to the state of `iface`. No-op if `iface` isn't in this
-  roster's priority list, or has no state yet.
+  Apply `fun` to the routing of `iface`. No-op if `iface` isn't in this
+  roster's priority list, or has no routing yet.
   """
-  @spec update_iface(t(), String.t(), (Interface.t() -> Interface.t())) :: t()
+  @spec update_iface(t(), String.t(), (Routing.t() -> Routing.t())) :: t()
   def update_iface(state, iface, fun) do
     case Map.fetch(state.states, iface) do
-      {:ok, iface_state} ->
-        %{state | states: Map.put(state.states, iface, fun.(iface_state))}
+      {:ok, routing} ->
+        %{state | states: Map.put(state.states, iface, fun.(routing))}
 
       :error ->
         state
@@ -63,20 +63,20 @@ defmodule VintageNetProxy.Roster do
   def value(state) do
     case active(state) do
       nil -> :unset
-      iface_state -> Interface.value(iface_state)
+      routing -> Routing.value(routing)
     end
   end
 
   @doc """
   Resolve `url` against the active interface. Returns the active
-  interface's `Interface.resolve/2` result, or
+  interface's `Routing.resolve/2` result, or
   `{:error, :no_proxy_resolved}` if no interface is currently active.
   """
-  @spec resolve(t(), String.t()) :: Interface.resolve_result()
+  @spec resolve(t(), String.t()) :: Routing.resolve_result()
   def resolve(state, url) do
     case active(state) do
       nil -> {:error, :no_proxy_resolved}
-      iface_state -> Interface.resolve(iface_state, url)
+      routing -> Routing.resolve(routing, url)
     end
   end
 
@@ -100,7 +100,7 @@ defmodule VintageNetProxy.Roster do
              }}
 
           s ->
-            snap = Interface.snapshot(s)
+            snap = Routing.snapshot(s)
 
             {iface,
              %{
@@ -127,7 +127,7 @@ defmodule VintageNetProxy.Roster do
   defp active(state) do
     Enum.find_value(state.interfaces, fn iface ->
       s = Map.get(state.states, iface)
-      if s && Interface.eligible?(s), do: s
+      if s && Routing.eligible?(s), do: s
     end)
   end
 

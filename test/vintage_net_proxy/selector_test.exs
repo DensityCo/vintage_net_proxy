@@ -7,7 +7,8 @@ defmodule VintageNetProxy.SelectorTest do
   """
   use ExUnit.Case, async: false
 
-  alias VintageNetProxy.{Interface, Publisher, Selector}
+  alias VintageNetProxy.{Publisher, Selector}
+  alias VintageNetProxy.Interface.Routing
 
   setup do
     uniq = :erlang.unique_integer([:positive])
@@ -25,7 +26,7 @@ defmodule VintageNetProxy.SelectorTest do
   end
 
   defp send_snapshot(iface, opts) do
-    snap = %Interface{
+    snap = %Routing{
       iface: iface,
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection),

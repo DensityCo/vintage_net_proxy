@@ -219,7 +219,7 @@ defmodule VintageNetProxy.ConnectivityTest do
 
       pac = ~s|function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:#{proxy_port}"; }|
 
-      snap = %VintageNetProxy.Interface{
+      snap = %VintageNetProxy.Interface.Routing{
         iface: iface,
         intent: %{mode: :auto},
         connection: :internet,

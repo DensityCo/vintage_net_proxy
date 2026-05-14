@@ -3,10 +3,11 @@ defmodule VintageNetProxy.RosterTest do
 
   import ExUnit.CaptureLog
 
-  alias VintageNetProxy.{Interface, Roster}
+  alias VintageNetProxy.Roster
+  alias VintageNetProxy.Interface.Routing
 
   defp iface(opts) do
-    %Interface{
+    %Routing{
       iface: Keyword.fetch!(opts, :iface),
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection, :disconnected),

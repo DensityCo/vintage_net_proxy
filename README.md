@@ -176,7 +176,7 @@ interface configuration. The schema follows GNOME's
 `org.gnome.system.proxy` taxonomy (`:direct | :auto | :manual`), which is
 the de facto Linux desktop convention.
 
-See `VintageNetProxy.Config` for full schema details.
+See `VintageNetProxy.Intent` for full schema details.
 
 ### Direct — bypass any proxy
 

@@ -88,7 +88,7 @@ defmodule VintageNetProxy.ConfigureEndToEndTest do
       raw = %{mode: :manual, host: "p", port: 80}
       :ok = VintageNet.configure(iface, %{type: TestTech, proxy: raw})
 
-      # `VintageNetProxy.Config.normalize/1` (called by our `Interface` when
+      # `VintageNetProxy.Intent.normalize/1` (called by our `Interface` when
       # it reads the property) is what fills in the default `scheme: :http`.
       # Here we only check the raw shape lands in the property table.
       assert %{proxy: ^raw} = VintageNet.get(["interface", iface, "config"])

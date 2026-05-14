@@ -4,7 +4,7 @@ defmodule VintageNetProxy.Wpad do
 
   Currently provides one thing: constructing the conventional
   `http://wpad.<domain>/wpad.dat` URL from a DNS domain. Used as the
-  third-tier fallback in `VintageNetProxy.Interface.effective_pac_url/1`
+  third-tier fallback in `VintageNetProxy.Interface.Routing.effective_pac_url/1`
   after an explicit `:pac_url` and after a DHCP option 252 `:wpad` URL.
 
   This is the fallback path that lets corporate networks publish a PAC
@@ -56,7 +56,7 @@ defmodule VintageNetProxy.Wpad do
   Returns `{wpad_url, domain}` with `nil` in either slot when the
   option is missing, empty, or the input isn't a map. The caller
   decides which to prefer — option 252 wins in
-  `VintageNetProxy.Interface.effective_pac_url/1`.
+  `VintageNetProxy.Interface.Routing.effective_pac_url/1`.
   """
   @spec from_dhcp_options(term()) :: {String.t() | nil, String.t() | nil}
   def from_dhcp_options(opts) when is_map(opts) do

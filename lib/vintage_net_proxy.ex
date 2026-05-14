@@ -58,7 +58,7 @@ defmodule VintageNetProxy do
       config :vintage_net_proxy, interfaces: ["eth0", "wlan0"]
 
   Then add a `:proxy` field to each interface configuration. The schema
-  is documented in `VintageNetProxy.Config`.
+  is documented in `VintageNetProxy.Intent`.
 
       VintageNet.configure("wlan0", %{
         type: VintageNetWiFi,
