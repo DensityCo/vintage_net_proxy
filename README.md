@@ -451,17 +451,20 @@ Per-interface GenServers split the problem geographically:
 
 ### Fast startup
 
-`Interface.init/1` reads PropertyTable values (fast) and returns
-immediately with `{:ok, state, {:continue, :startup}}`. The
-`handle_continue(:startup, ...)` callback does the blocking PAC fetch
-*after* init returns. Effects:
+`Interface.init/1` is a true no-op — it just stashes the iface name
+and parent on the struct and returns `{:ok, state, {:continue,
+:startup}}`. The `handle_continue(:startup, ...)` callback then does
+*everything*: subscribes to the per-interface PropertyTable keys,
+reads their current values, runs the PAC fetch, and pushes the first
+snapshot to the Selector. Effects:
 
-  * `Supervisor.start_link` returns in ~5ms regardless of whether PAC
-    URLs are reachable (verified: 5057ms → 5ms with an unreachable PAC
-    URL pre-populated in the PropertyTable).
-  * Multiple interfaces fetch their PAC scripts in parallel — each
+  * `Supervisor.start_link` returns in microseconds regardless of
+    whether PAC URLs are reachable, whether VintageNet is responsive,
+    or whether the network is up. `init` doesn't talk to anything
+    outside the process.
+  * Multiple interfaces do their startup work in parallel — each
     `handle_continue` runs in its own process.
-  * Application boot doesn't stall on the network coming up.
+  * Application boot doesn't stall on anything network-adjacent.
 
 ### Supervision
 

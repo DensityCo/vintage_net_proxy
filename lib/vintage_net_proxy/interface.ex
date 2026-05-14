@@ -193,32 +193,35 @@ defmodule VintageNetProxy.Interface do
 
   # --- GenServer ---
 
+  # Keep `init` a no-op: just stash the iface and parent on the
+  # struct and hand off to `handle_continue/2`. All the actual work —
+  # PropertyTable subscriptions, reading current values, the PAC
+  # fetch — happens after init returns, so `Supervisor.start_link`
+  # comes back in microseconds regardless of VintageNet's
+  # responsiveness or whether the network is up.
   @impl true
   def init(opts) do
     iface = Keyword.fetch!(opts, :iface)
     parent = Keyword.fetch!(opts, :parent)
+    {:ok, {%__MODULE__{iface: iface}, parent}, {:continue, :startup}}
+  end
+
+  @impl true
+  def handle_continue(:startup, {state, parent}) do
+    iface = state.iface
 
     Enum.each(["config", "dhcp_options", "connection", "addresses"], fn prop ->
       VintageNet.subscribe(["interface", iface, prop])
     end)
 
-    # Read current PropertyTable values synchronously (fast) but defer the
-    # blocking PAC fetch to handle_continue so Supervisor.start_link returns
-    # promptly. Fetches across multiple interfaces run in parallel because
-    # each Interface owns its own process.
     state =
-      %__MODULE__{iface: iface}
+      state
       |> put_connection(VintageNet.get(["interface", iface, "connection"]))
       |> put_intent(VintageNet.get(["interface", iface, "config"]))
       |> put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
       |> put_addresses(VintageNet.get(["interface", iface, "addresses"]))
+      |> maybe_fetch()
 
-    {:ok, {state, parent}, {:continue, :startup}}
-  end
-
-  @impl true
-  def handle_continue(:startup, {state, parent}) do
-    state = maybe_fetch(state)
     push(parent, state)
     {:noreply, {state, parent}}
   end
