@@ -142,21 +142,18 @@ evaluator doesn't support and silently skipped the rule), or the
 device simply has no proxy resolved. The last is normal; the middle
 one is a misconfiguration that's invisible from outside.
 
-The library logs when PAC mode evaluates to `:direct` so operators
-investigating "why is this request bypassing the proxy" don't have
-to enable debug to see it. The first occurrence per URL is logged
-at `:info`; subsequent occurrences for the same URL drop to
-`:debug`, so PAC scripts with legitimate `DIRECT` rules for
-internal hosts don't flood the log:
+The library logs at `Logger.info` whenever PAC mode evaluates to
+`:direct`, so operators investigating "why is this request bypassing
+the proxy" see the signal without enabling debug:
 
 ```
 [info]  VintageNetProxy: PAC on wlan0 evaluated to DIRECT for "https://api.example.com/"
 ```
 
-Dedup is per-URL and lives for the lifetime of the BEAM VM (an ETS
-table created at application start). Reboot resets the set and
-operators see each URL surfaced again — which is the right behavior
-for "did anything fall through since boot?"
+PAC scripts that intentionally return `DIRECT` for many internal
+hosts will produce a log line per such call; if that volume becomes
+a problem in your deployment, plumb a Logger filter on the
+`pac: :direct` metadata to drop or sample it.
 
 Consumers that want a louder one-off warning the first time their
 own connect path falls through to direct on a PAC-managed network

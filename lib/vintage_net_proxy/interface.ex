@@ -136,17 +136,11 @@ defmodule VintageNetProxy.Interface do
   # `DIRECT`, or the parser couldn't make sense of the rule and fell
   # through. Application-side those look identical to "no PAC loaded"
   # — which is the wrong diagnosis for a corporate device where a
-  # mandatory proxy was supposed to apply.
-  #
-  # Surface it: first occurrence per URL logs at :info so operators see
-  # it without enabling debug; subsequent occurrences drop to :debug so
-  # PAC scripts with legitimate `DIRECT` rules for internal hosts don't
-  # flood the log on every request.
+  # mandatory proxy was supposed to apply. Surface it at :info so
+  # operators investigating "why is this request bypassing the proxy"
+  # see it without enabling debug.
   defp log_pac_result(:direct, iface, url) do
-    level = if seen_before?(url), do: :debug, else: :info
-
-    Logger.log(
-      level,
+    Logger.info(
       "VintageNetProxy: PAC on #{iface} evaluated to DIRECT for #{inspect(url)}",
       pac: :direct,
       iface: iface,
@@ -157,19 +151,6 @@ defmodule VintageNetProxy.Interface do
   end
 
   defp log_pac_result(result, _iface, _url), do: result
-
-  @pac_seen_table :vintage_net_proxy_pac_seen
-
-  # Mark `url` as seen and return whether it was already there. Uses
-  # `insert_new` so concurrent first-time calls for the same URL race
-  # safely — exactly one gets `false` (the :info logger), the rest see
-  # `true` (drop to :debug).
-  defp seen_before?(url) do
-    case :ets.whereis(@pac_seen_table) do
-      :undefined -> false
-      _ -> not :ets.insert_new(@pac_seen_table, {url, true})
-    end
-  end
 
   @doc "Introspection snapshot."
   def snapshot(state) do
