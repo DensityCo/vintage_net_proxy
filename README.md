@@ -518,11 +518,11 @@ debugging or external inspection.
   * `VintageNetProxy.Fetcher` — synchronous `Fetcher.get(url)` using
     `:httpc`. Has a 5-second timeout and a 256 KiB body cap. Logs a
     warning on every failure path so callers don't have to thread
-    error reasons through state. Always passes explicit `ssl` options
-    (`verify_peer` against the `:castore` CA bundle, with hostname
-    check) — without this, OTP 26+'s eager
-    `:public_key.cacerts_get/0` crashes on systems with no OS CA
-    store, e.g. Nerves images.
+    error reasons through state. Passes
+    `ssl: [verify: :verify_none]` explicitly — required to avoid OTP
+    26+'s eager `:public_key.cacerts_get/0` crash on systems with no
+    OS CA store (Nerves images), and consistent with the WPAD trust
+    model where the LAN, not TLS, is the trust boundary.
 
   * `VintageNetProxy.Wpad` — DNS-WPAD URL construction (option 15 →
     `http://wpad.<domain>/wpad.dat`) and DHCP-option extraction

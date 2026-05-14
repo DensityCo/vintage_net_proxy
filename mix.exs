@@ -28,7 +28,6 @@ defmodule VintageNetProxy.MixProject do
   defp deps do
     [
       {:vintage_net, "~> 0.13"},
-      {:castore, "~> 1.0"},
       # Test-only: confirms real consumer technologies preserve the `:proxy`
       # field through their `normalize/1` callbacks.
       {:vintage_net_ethernet, "~> 0.11", only: :test, runtime: false},
