@@ -169,23 +169,34 @@ defmodule VintageNetProxy.ConnectivityTest do
       assert Connectivity.check_now() == :ok
     end
 
-    test "descriptor → CONNECT probe via that proxy" do
+    test "{:manual, descriptor} → CONNECT probe via that proxy" do
       port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
       descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
-      PropertyTable.put(VintageNet, @config_property, descriptor)
+      PropertyTable.put(VintageNet, @config_property, {:manual, descriptor})
 
       start_checker(probe_urls: ["https://target.test/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == :ok
     end
 
-    test "descriptor with a SOCKS scheme → :socks_not_supported" do
+    test "{:manual, _} with a SOCKS scheme → :socks_not_supported" do
       descriptor = %{scheme: :socks5, host: "127.0.0.1", port: 1080}
-      PropertyTable.put(VintageNet, @config_property, descriptor)
+      PropertyTable.put(VintageNet, @config_property, {:manual, descriptor})
 
       start_checker(probe_urls: ["https://target.test/"], initial_delay: 60_000)
 
       assert Connectivity.check_now() == {:error, :socks_not_supported}
+    end
+
+    test "{:auto, {:error, _}} → falls back to a direct probe" do
+      port = accepting_target()
+      PropertyTable.put(VintageNet, @config_property, {:auto, {:error, :nxdomain}})
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
+
+      # The direct probe to 127.0.0.1:port succeeds; the value just says
+      # "we couldn't resolve a proxy" — Probe falls back to direct so the
+      # connectivity status honestly reflects what's reachable.
+      assert Connectivity.check_now() == :ok
     end
   end
 

@@ -13,6 +13,7 @@ defmodule VintageNetProxy.InterfaceTest do
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection, :disconnected),
       pac_script: Keyword.get(opts, :pac_script),
+      pac_fetch_error: Keyword.get(opts, :pac_fetch_error),
       dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url),
       dhcp_domain: Keyword.get(opts, :dhcp_domain)
     }
@@ -45,17 +46,32 @@ defmodule VintageNetProxy.InterfaceTest do
       assert Interface.value(iface(intent: %{mode: :direct})) == :direct
     end
 
-    test ":manual → descriptor" do
+    test ":manual → {:manual, descriptor}" do
       intent = %{mode: :manual, scheme: :http, host: "p", port: 8080}
-      assert Interface.value(iface(intent: intent)) == %{scheme: :http, host: "p", port: 8080}
+
+      assert Interface.value(iface(intent: intent)) ==
+               {:manual, %{scheme: :http, host: "p", port: 8080}}
     end
 
-    test ":auto with pac_script → :auto" do
-      assert Interface.value(iface(intent: %{mode: :auto}, pac_script: "FN")) == :auto
+    test ":auto with pac_script → {:auto, :ready}" do
+      assert Interface.value(iface(intent: %{mode: :auto}, pac_script: "FN")) ==
+               {:auto, :ready}
     end
 
-    test ":auto without pac_script → :unset" do
+    test ":auto with no script and no fetch error → :unset" do
       assert Interface.value(iface(intent: %{mode: :auto})) == :unset
+    end
+
+    test ":auto with no script and a fetch error → {:auto, {:error, reason}}" do
+      state = iface(intent: %{mode: :auto}, pac_fetch_error: :timeout)
+      assert Interface.value(state) == {:auto, {:error, :timeout}}
+    end
+
+    test ":auto with a script wins over a stale fetch error" do
+      state =
+        iface(intent: %{mode: :auto}, pac_script: "FN", pac_fetch_error: :previously_failed)
+
+      assert Interface.value(state) == {:auto, :ready}
     end
   end
 
@@ -201,6 +217,7 @@ defmodule VintageNetProxy.InterfaceTest do
       assert snap.connection == :internet
       assert snap.dhcp_wpad_url == "http://wpad/"
       assert snap.pac_loaded? == true
+      assert snap.pac_fetch_error == nil
     end
 
     test "pac_url falls back to dhcp_wpad_url for :auto intent without explicit pac_url" do
@@ -217,6 +234,16 @@ defmodule VintageNetProxy.InterfaceTest do
         |> Interface.snapshot()
 
       assert snap.pac_url == nil
+    end
+
+    test "surfaces pac_fetch_error and the matching {:auto, {:error, _}} value" do
+      snap =
+        iface(intent: %{mode: :auto}, pac_fetch_error: :nxdomain)
+        |> Interface.snapshot()
+
+      assert snap.pac_fetch_error == :nxdomain
+      assert snap.value == {:auto, {:error, :nxdomain}}
+      assert snap.pac_loaded? == false
     end
   end
 end

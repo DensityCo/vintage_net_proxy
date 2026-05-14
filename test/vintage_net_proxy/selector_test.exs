@@ -30,6 +30,7 @@ defmodule VintageNetProxy.SelectorTest do
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection),
       pac_script: Keyword.get(opts, :pac_script),
+      pac_fetch_error: Keyword.get(opts, :pac_fetch_error),
       dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url)
     }
 
@@ -55,20 +56,35 @@ defmodule VintageNetProxy.SelectorTest do
       assert Publisher.get() == :unset
     end
 
-    test "publishes the descriptor for an eligible :manual snapshot", %{primary: iface} do
+    test "publishes {:manual, descriptor} for an eligible :manual snapshot", %{primary: iface} do
       manual = %{mode: :manual, scheme: :http, host: "p.corp", port: 8080}
       send_snapshot(iface, intent: manual, connection: :internet)
-      assert Publisher.get() == %{scheme: :http, host: "p.corp", port: 8080}
+
+      assert Publisher.get() ==
+               {:manual, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
-    test "publishes :auto when :auto snapshot includes a pac_script", %{primary: iface} do
+    test "publishes {:auto, :ready} when :auto snapshot includes a pac_script",
+         %{primary: iface} do
       send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: "FN")
-      assert Publisher.get() == :auto
+      assert Publisher.get() == {:auto, :ready}
     end
 
-    test "publishes :unset when :auto snapshot has no pac_script yet", %{primary: iface} do
+    test "publishes :unset when :auto snapshot has no pac_script and no error",
+         %{primary: iface} do
       send_snapshot(iface, intent: %{mode: :auto}, connection: :internet)
       assert Publisher.get() == :unset
+    end
+
+    test "publishes {:auto, {:error, reason}} when :auto snapshot has a fetch error",
+         %{primary: iface} do
+      send_snapshot(iface,
+        intent: %{mode: :auto},
+        connection: :internet,
+        pac_fetch_error: :nxdomain
+      )
+
+      assert Publisher.get() == {:auto, {:error, :nxdomain}}
     end
   end
 

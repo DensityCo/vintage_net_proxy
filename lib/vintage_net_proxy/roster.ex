@@ -83,7 +83,8 @@ defmodule VintageNetProxy.Roster do
                dhcp_wpad_url: nil,
                dhcp_domain: nil,
                pac_url: nil,
-               pac_loaded?: false
+               pac_loaded?: false,
+               pac_fetch_error: nil
              }}
 
           s ->
@@ -96,7 +97,8 @@ defmodule VintageNetProxy.Roster do
                dhcp_wpad_url: snap.dhcp_wpad_url,
                dhcp_domain: snap.dhcp_domain,
                pac_url: snap.pac_url,
-               pac_loaded?: snap.pac_loaded?
+               pac_loaded?: snap.pac_loaded?,
+               pac_fetch_error: snap.pac_fetch_error
              }}
         end
       end)

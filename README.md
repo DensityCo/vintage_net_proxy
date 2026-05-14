@@ -45,21 +45,25 @@ reacts.
 ## Property surface
 
 The current proxy *model* is published at `["proxy", "config"]` in the
-`VintageNet` property table as one of:
+`VintageNet` property table. Stateful modes carry a `{mode, sub_state}`
+tuple so loading and error states are first-class instead of being
+collapsed onto `:unset`:
 
 | Value | Meaning |
 |---|---|
-| `:unset` | No proxy intent, or PAC intent without a loaded script yet |
-| `:direct` | Bypass any proxy; connect directly |
-| `proxy_descriptor` | A fixed proxy to use for everything |
-| `:auto` | PAC-managed — call `VintageNetProxy.resolve(url)` per request |
+| `:unset` | No eligible interface, or eligible interface has no `:proxy` intent |
+| `:direct` | Direct mode; bypass any proxy |
+| `{:manual, descriptor}` | Explicit proxy from manual mode |
+| `{:auto, :ready}` | PAC loaded; call `VintageNetProxy.resolve(url)` per request |
+| `{:auto, {:error, reason}}` | PAC fetch failed; sticks until the URL changes, the interface flaps, or the next external event re-fetches |
 
-PAC is inherently per-URL, so for `:auto` the library does not compress
-the script down to a single descriptor. The published value is the
-sentinel `:auto`; consumers route each outbound URL through
-`resolve/1` for a concrete answer.
+PAC is inherently per-URL, so under `{:auto, :ready}` the library does
+not compress the script down to a single descriptor. The published
+value just says "PAC is loaded"; consumers route each outbound URL
+through `resolve/1` for a concrete answer.
 
-The `proxy_descriptor` map looks like:
+The `descriptor` carried inside `{:manual, _}` (and returned by
+`resolve/1`) looks like:
 
 ```elixir
 %{
@@ -79,10 +83,11 @@ are present only for authenticated proxies (typically set via the
 
 For most consumers, the simplest integration is to call
 `VintageNetProxy.resolve/1` at connect time. It returns `:direct` or a
-descriptor, never `:unset` — the library collapses "no proxy intent"
-into `:direct` (treat-as-no-proxy is the right default; gating
-connections on a non-`:unset` value would mean a device on a network
-with no proxy advertisement never connects).
+descriptor, never any of the tagged states — the library collapses
+"no proxy resolved yet" / "PAC fetch failed" / "no proxy intent" into
+`:direct` (treat-as-no-proxy is the right default; gating connections
+on a stricter signal would mean a device on a network with no proxy
+advertisement never connects).
 
 ```elixir
 defp connect(url) do
@@ -93,27 +98,40 @@ defp connect(url) do
 end
 ```
 
-If you do subscribe to the published property (e.g. to drop and
-reconnect when the proxy changes), treat `:unset` the same as
-`:direct`:
+If you subscribe to the published property — e.g. so independent
+outbound clients (MQTT, WebSocket) can drop and reconnect when the
+proxy changes — match on the tagged shape:
 
 ```elixir
 VintageNet.subscribe(VintageNetProxy.property())
 
 def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
   case proxy do
-    :unset                       -> {:noreply, reconnect(state, :direct)}
-    :direct                      -> {:noreply, reconnect(state, :direct)}
-    :auto                        -> {:noreply, reconnect(state, :auto)}
-    %{scheme: _} = descriptor    -> {:noreply, reconnect(state, descriptor)}
+    :unset                  -> {:noreply, hold(state)}          # wait
+    :direct                 -> {:noreply, reconnect(state, :direct)}
+    {:manual, descriptor}   -> {:noreply, reconnect(state, descriptor)}
+    {:auto, :ready}         -> {:noreply, reconnect(state, :auto)}
+    {:auto, {:error, _}}    -> {:noreply, alert_or_hold(state)}
   end
 end
 ```
 
-The `:auto` sentinel means "PAC is loaded; call `resolve/1` per
-URL." It's distinct from `:unset` (no proxy intent / no PAC loaded
-yet) so consumers can opt out of routing through a stale PAC during
-the boot window.
+Consumers that don't care about the breakdown can use a binary gate —
+`:unset` means "wait, nothing useful yet," anything else is "we have
+something actionable, attempt the connection":
+
+```elixir
+case proxy do
+  :unset -> hold(state)
+  _      -> attempt(state, proxy)
+end
+```
+
+The `{:auto, :ready}` shape means "PAC is loaded; call `resolve/1`
+per URL." It's distinct from `:unset` (no eligible interface or no
+intent yet) and from `{:auto, {:error, reason}}` (we tried to load
+the PAC and it failed), so consumers can give each case its own
+behavior — wait, alert, fall back to direct, etc.
 
 ## Configuration
 
@@ -286,12 +304,17 @@ domains, so a single-vendor outage doesn't take everyone down. Set
   * For `:direct` (or `:unset`) — TCP-connect to the URL's host and
     port. A successful connect means the device can reach that target
     on that port without a proxy.
-  * For an HTTP / HTTPS proxy descriptor — TCP-connect to the proxy
-    and send `CONNECT host:port HTTP/1.1`. A `200` response means the
-    proxy successfully opened the upstream TCP connection on our
-    behalf — i.e. outbound through the proxy is working end-to-end.
-  * For `:auto` — `resolve/1` is called against the probe URL to get a
-    concrete decision, then dispatched as above.
+  * For `{:manual, descriptor}` with an HTTP/HTTPS scheme —
+    TCP-connect to the proxy and send `CONNECT host:port HTTP/1.1`. A
+    `200` response means the proxy successfully opened the upstream
+    TCP connection on our behalf — i.e. outbound through the proxy is
+    working end-to-end.
+  * For `{:auto, :ready}` — `resolve/1` is called against the probe URL
+    to get a concrete decision, then dispatched as above.
+  * For `{:auto, {:error, _}}` — falls back to a direct probe so the
+    connectivity status honestly reports whether the device can reach
+    anything (the answer is usually "no" behind a firewall, which is
+    the truthful signal).
   * SOCKS proxies are reported as `{:error, :socks_not_supported}`.
     Supporting them would require a SOCKS client this library
     deliberately doesn't carry; an explicit error is more useful than
@@ -323,9 +346,9 @@ Probes fire on four triggers:
   4. Whenever `["proxy", "pac_revision"]` ticks — the Selector fires
      this when an active interface's PAC script changes in place
      (same effective URL, new body). The `config` property can't
-     distinguish that case (both before and after publish `:auto`),
-     but the rules for what flows through the proxy may have
-     changed, so a fresh probe is run.
+     distinguish that case (both states publish `{:auto, :ready}`),
+     but the rules for what flows through the proxy may have changed,
+     so a fresh probe is run.
 
 You can also force an immediate probe synchronously via
 `VintageNetProxy.check_connectivity/0`, which returns the new result.
@@ -462,8 +485,9 @@ rest of the interface config and is restored on boot automatically.
 ## Per-URL resolution
 
 PAC scripts are a function from URL → proxy decision, so for `:auto`
-mode the published property is the sentinel `:auto`, not a descriptor.
-Consumers call `resolve/1` per request:
+mode the published property carries `{:auto, :ready}` once the script
+is loaded, not a descriptor. Consumers call `resolve/1` per request to
+get the concrete answer for that URL:
 
 ```elixir
 VintageNetProxy.resolve("https://api.example.com/")
@@ -577,7 +601,8 @@ matrix paired with OTP 26 → 28.
 - A real `VintageNet.OSEventDispatcher.dispatch(["bound"], env)` with a
   realistic udhcpc env hash (including `"wpad" => ...` from DHCP
   option 252) flows through the udhcpc-env parser, lands as `:wpad` in
-  `dhcp_options`, and triggers a PAC fetch that publishes `:auto`.
+  `dhcp_options`, and triggers a PAC fetch that publishes
+  `{:auto, :ready}`.
 - An actual HTTP `GET` issued to the descriptor `resolve/1` returns
   reaches the upstream — observable in tinyproxy's access log.
 

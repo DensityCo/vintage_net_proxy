@@ -9,6 +9,7 @@ defmodule VintageNetProxy.RosterTest do
       intent: Keyword.get(opts, :intent),
       connection: Keyword.get(opts, :connection, :disconnected),
       pac_script: Keyword.get(opts, :pac_script),
+      pac_fetch_error: Keyword.get(opts, :pac_fetch_error),
       dhcp_wpad_url: Keyword.get(opts, :dhcp_wpad_url)
     }
   end
@@ -38,13 +39,15 @@ defmodule VintageNetProxy.RosterTest do
       assert Roster.value(s) == :direct
     end
 
-    test "eligible :manual → descriptor" do
+    test "eligible :manual → {:manual, descriptor}" do
       intent = %{mode: :manual, scheme: :http, host: "p.example", port: 8080}
       s = state([iface(iface: "eth0", intent: intent, connection: :lan)])
-      assert Roster.value(s) == %{scheme: :http, host: "p.example", port: 8080}
+
+      assert Roster.value(s) ==
+               {:manual, %{scheme: :http, host: "p.example", port: 8080}}
     end
 
-    test "eligible :auto with pac_script → :auto" do
+    test "eligible :auto with pac_script → {:auto, :ready}" do
       s =
         state([
           iface(
@@ -55,12 +58,26 @@ defmodule VintageNetProxy.RosterTest do
           )
         ])
 
-      assert Roster.value(s) == :auto
+      assert Roster.value(s) == {:auto, :ready}
     end
 
-    test "eligible :auto without pac_script → :unset" do
+    test "eligible :auto without pac_script or error → :unset" do
       s = state([iface(iface: "eth0", intent: %{mode: :auto}, connection: :internet)])
       assert Roster.value(s) == :unset
+    end
+
+    test "eligible :auto with a fetch error → {:auto, {:error, reason}}" do
+      s =
+        state([
+          iface(
+            iface: "eth0",
+            intent: %{mode: :auto},
+            connection: :internet,
+            pac_fetch_error: :timeout
+          )
+        ])
+
+      assert Roster.value(s) == {:auto, {:error, :timeout}}
     end
   end
 

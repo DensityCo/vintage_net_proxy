@@ -23,6 +23,7 @@ defmodule VintageNetProxy.Interface do
             dhcp_wpad_url: nil,
             dhcp_domain: nil,
             pac_script: nil,
+            pac_fetch_error: nil,
             connection: nil
 
   @type t :: %__MODULE__{
@@ -31,6 +32,7 @@ defmodule VintageNetProxy.Interface do
           dhcp_wpad_url: String.t() | nil,
           dhcp_domain: String.t() | nil,
           pac_script: String.t() | nil,
+          pac_fetch_error: term() | nil,
           connection: atom() | nil
         }
 
@@ -81,13 +83,34 @@ defmodule VintageNetProxy.Interface do
   def eligible?(state),
     do: state.intent != nil and state.connection in @up_states
 
-  @doc "The proxy value this interface would publish if it were active."
+  @doc """
+  The proxy value this interface would publish if it were active.
+
+  Returns one of:
+
+    * `:unset` — no intent, or `:auto` intent with no URL to fetch yet
+    * `:direct` — direct mode
+    * `{:manual, descriptor}` — explicit proxy from manual mode
+    * `{:auto, :ready}` — auto mode, PAC script loaded
+    * `{:auto, {:error, reason}}` — auto mode, last fetch attempt failed
+  """
   def value(state) do
     case state.intent do
-      %{mode: :direct} -> :direct
-      %{mode: :manual} = m -> Config.to_descriptor(m)
-      %{mode: :auto} -> if not is_nil(state.pac_script), do: :auto, else: :unset
-      _ -> :unset
+      %{mode: :direct} ->
+        :direct
+
+      %{mode: :manual} = m ->
+        {:manual, Config.to_descriptor(m)}
+
+      %{mode: :auto} ->
+        cond do
+          not is_nil(state.pac_script) -> {:auto, :ready}
+          not is_nil(state.pac_fetch_error) -> {:auto, {:error, state.pac_fetch_error}}
+          true -> :unset
+        end
+
+      _ ->
+        :unset
     end
   end
 
@@ -110,6 +133,7 @@ defmodule VintageNetProxy.Interface do
       intent: state.intent,
       connection: state.connection,
       pac_loaded?: not is_nil(state.pac_script),
+      pac_fetch_error: state.pac_fetch_error,
       dhcp_wpad_url: state.dhcp_wpad_url,
       dhcp_domain: state.dhcp_domain,
       pac_url: configured_pac_url(state)
@@ -174,10 +198,10 @@ defmodule VintageNetProxy.Interface do
     {:noreply, {state, parent}}
   end
 
-  # Apply the field-level change, then drop pac_script if the effective
-  # PAC URL changed. Same URL before-and-after preserves the cached script
-  # (free dedup); any other transition invalidates so the next fetch can
-  # populate from the new URL.
+  # Apply the field-level change, then drop pac_script and any cached
+  # fetch error if the effective PAC URL changed. Same URL before-and-
+  # after preserves the cached script (free dedup); any other transition
+  # invalidates so the next fetch can populate from the new URL.
   defp transition(state, change_fn) do
     old_url = effective_pac_url(state)
     new_state = change_fn.(state)
@@ -185,12 +209,14 @@ defmodule VintageNetProxy.Interface do
     if effective_pac_url(new_state) == old_url do
       new_state
     else
-      %{new_state | pac_script: nil}
+      %{new_state | pac_script: nil, pac_fetch_error: nil}
     end
   end
 
   # Synchronous fetch inside the Interface's own mailbox. Blocking is fine
-  # here — the Selector and other interfaces are unaffected.
+  # here — the Selector and other interfaces are unaffected. On success
+  # caches the script and clears any prior error; on failure caches the
+  # error so the published value can carry it.
   defp maybe_fetch(state) do
     case fetch_target(state) do
       nil ->
@@ -199,14 +225,14 @@ defmodule VintageNetProxy.Interface do
       url ->
         case Fetcher.get(url) do
           {:ok, script} ->
-            %{state | pac_script: script}
+            %{state | pac_script: script, pac_fetch_error: nil}
 
           {:error, reason} ->
             Logger.warning(
               "VintageNetProxy: PAC fetch failed on #{state.iface} (#{inspect(url)}): #{inspect(reason)}"
             )
 
-            state
+            %{state | pac_fetch_error: reason}
         end
     end
   end

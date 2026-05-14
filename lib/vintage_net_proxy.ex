@@ -6,30 +6,45 @@ defmodule VintageNetProxy do
 
   ## Property
 
-  The current proxy *model* is published at `["proxy", "config"]` in the
-  `VintageNet` property table as one of:
+  The current proxy *model* is published at `["proxy", "config"]` in
+  the `VintageNet` property table. Stateful modes carry a `{mode,
+  sub_state}` tuple so that loading / error states are first-class
+  instead of being collapsed onto `:unset`:
 
-    * `:unset` — no proxy intent, or PAC intent without a loaded script
-    * `:direct` — connect directly, no proxy
-    * `proxy_descriptor()` map — a fixed proxy to use; see `t:proxy_descriptor/0`
-    * `:auto` — PAC-managed; call `resolve/1` per request
+    * `:unset` — no eligible interface, or eligible interface has no
+      `:proxy` intent
+    * `:direct` — direct mode; bypass any proxy
+    * `{:manual, descriptor}` — explicit proxy from manual mode
+    * `{:auto, :ready}` — PAC loaded; call `resolve/1` per request
+    * `{:auto, {:error, reason}}` — PAC fetch failed; the cached
+      failure stays until something invalidates it (URL changes,
+      interface flaps, next external event re-fetches)
 
-  PAC is inherently per-URL, so for `:auto` the library does *not*
-  compress the script down to a single answer. Consumers call
-  `resolve/1` with the URL they're about to fetch.
+  PAC is inherently per-URL, so under `{:auto, :ready}` the library
+  does *not* compress the script down to a single answer. Consumers
+  call `resolve/1` with the URL they're about to fetch.
 
   Consumers subscribe and react:
 
       VintageNet.subscribe(VintageNetProxy.property())
 
-      def handle_info({VintageNet, ["proxy", "config"], _old, proxy, _meta}, state) do
+      def handle_info({VintageNet, ["proxy", "config"], _old, proxy, _}, state) do
         case proxy do
-          :unset -> {:noreply, state}
-          :direct -> {:noreply, connect_direct(state)}
-          :auto -> {:noreply, state}  # call resolve(url) per request
-          %{scheme: :http} = px -> {:noreply, connect_http(state, px)}
-          %{scheme: :socks5} = px -> {:noreply, connect_socks5(state, px)}
+          :unset                 -> {:noreply, state}
+          :direct                -> {:noreply, connect_direct(state)}
+          {:manual, desc}        -> {:noreply, connect_via(state, desc)}
+          {:auto, :ready}        -> {:noreply, state}  # call resolve(url) per request
+          {:auto, {:error, _}}   -> {:noreply, alert_or_wait(state)}
         end
+      end
+
+  Consumers that don't care about the breakdown can match `:unset`
+  and treat anything else as "we have something actionable, attempt
+  the connection":
+
+      case proxy do
+        :unset -> wait()
+        _      -> attempt(proxy)
       end
 
   ## Configuration
@@ -101,7 +116,17 @@ defmodule VintageNetProxy do
           optional(:password) => String.t()
         }
 
-  @type proxy :: :unset | :direct | :auto | proxy_descriptor()
+  @typedoc """
+  Published proxy model. See the module docs for the meaning of each
+  shape.
+  """
+  @type proxy ::
+          :unset
+          | :direct
+          | {:manual, proxy_descriptor()}
+          | {:auto, :ready}
+          | {:auto, {:error, term()}}
+
   @type resolved :: :direct | proxy_descriptor()
 
   @typedoc """
