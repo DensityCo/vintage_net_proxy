@@ -92,15 +92,41 @@ defmodule VintageNetProxy.PAC do
     {:error, :pac_fallthrough}
   end
 
-  # JS-style comments break the rule-extraction regex when they sit between
-  # the predicate's `)` and `return`. Strip them up front. Not string-aware:
-  # a `//` inside a quoted pattern is rare in real WPAD files and would
-  # only affect rules whose predicate this evaluator couldn't match anyway.
+  # Strip JS-style line (`// ...`) and block (`/* ... */`) comments,
+  # but only when they appear outside string literals. URL-pattern
+  # rules like `shExpMatch(url, "https://*")` carry `//` inside
+  # strings, so a naïve regex replacement would cut the rest of the
+  # rule along with the false-positive comment. Walk the script
+  # char by char, tracking whether we're inside a `"` or `'` string,
+  # and only recognize comment starts in code state. Escape sequences
+  # (`\"`, `\'`, `\\`) inside strings are honored so a `"foo\"bar"`
+  # doesn't terminate prematurely.
   defp strip_comments(script) do
-    script
-    |> String.replace(~r{/\*.*?\*/}us, " ")
-    |> String.replace(~r{//[^\n]*}u, " ")
+    script |> walk(:code, []) |> IO.iodata_to_binary()
   end
+
+  defp walk("", _state, acc), do: Enum.reverse(acc)
+
+  defp walk("//" <> rest, :code, acc), do: walk(rest, :line_comment, [?\s | acc])
+  defp walk("/*" <> rest, :code, acc), do: walk(rest, :block_comment, [?\s | acc])
+
+  defp walk(<<q, rest::binary>>, :code, acc) when q in [?", ?'],
+    do: walk(rest, {:string, q}, [q | acc])
+
+  defp walk(<<c, rest::binary>>, :code, acc), do: walk(rest, :code, [c | acc])
+
+  defp walk("\n" <> rest, :line_comment, acc), do: walk(rest, :code, [?\n | acc])
+  defp walk(<<_, rest::binary>>, :line_comment, acc), do: walk(rest, :line_comment, acc)
+
+  defp walk("*/" <> rest, :block_comment, acc), do: walk(rest, :code, acc)
+  defp walk(<<_, rest::binary>>, :block_comment, acc), do: walk(rest, :block_comment, acc)
+
+  defp walk(<<q, rest::binary>>, {:string, q}, acc), do: walk(rest, :code, [q | acc])
+
+  defp walk(<<?\\, c, rest::binary>>, {:string, _} = s, acc),
+    do: walk(rest, s, [c, ?\\ | acc])
+
+  defp walk(<<c, rest::binary>>, {:string, _} = s, acc), do: walk(rest, s, [c | acc])
 
   defp extract_rules(script) do
     @if_re
