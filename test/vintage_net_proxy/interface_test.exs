@@ -109,16 +109,50 @@ defmodule VintageNetProxy.InterfaceTest do
     @pac_direct ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
     @pac_proxy ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
 
-    test "logs at :debug when PAC mode evaluates to :direct" do
+    # Unique per test so the seen-URLs ETS table from a prior test (or
+    # a concurrent async test) can't shift our expected log level.
+    defp unique_url, do: "https://t#{:erlang.unique_integer([:positive])}.example/"
+
+    test "first PAC :direct for a URL logs at :info, with iface + url" do
       state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_direct)
+      url = unique_url()
 
       log =
-        capture_log([level: :debug], fn ->
-          assert Interface.resolve(state, "https://api.example.com/") == :direct
+        capture_log([level: :info], fn ->
+          assert Interface.resolve(state, url) == :direct
         end)
 
       assert log =~ "PAC on wlan0 evaluated to DIRECT"
-      assert log =~ "https://api.example.com/"
+      assert log =~ url
+    end
+
+    test "subsequent PAC :direct for the same URL drops to :debug" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_direct)
+      url = unique_url()
+
+      # Prime the dedup set.
+      Interface.resolve(state, url)
+
+      info_log = capture_log([level: :info], fn -> Interface.resolve(state, url) end)
+      refute info_log =~ "PAC on"
+
+      debug_log = capture_log([level: :debug], fn -> Interface.resolve(state, url) end)
+      assert debug_log =~ "PAC on"
+    end
+
+    test "different URLs each log at :info on their first occurrence" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_direct)
+      url_a = unique_url()
+      url_b = unique_url()
+
+      log =
+        capture_log([level: :info], fn ->
+          Interface.resolve(state, url_a)
+          Interface.resolve(state, url_b)
+        end)
+
+      assert log =~ url_a
+      assert log =~ url_b
     end
 
     test "does not log when PAC mode evaluates to a proxy descriptor" do
@@ -126,7 +160,7 @@ defmodule VintageNetProxy.InterfaceTest do
 
       log =
         capture_log([level: :debug], fn ->
-          assert Interface.resolve(state, "https://api.example.com/") ==
+          assert Interface.resolve(state, unique_url()) ==
                    %{scheme: :http, host: "p.corp", port: 8080}
         end)
 
@@ -138,7 +172,7 @@ defmodule VintageNetProxy.InterfaceTest do
 
       log =
         capture_log([level: :debug], fn ->
-          assert Interface.resolve(state, "https://api.example.com/") == :direct
+          assert Interface.resolve(state, unique_url()) == :direct
         end)
 
       refute log =~ "PAC on"
@@ -149,7 +183,7 @@ defmodule VintageNetProxy.InterfaceTest do
 
       log =
         capture_log([level: :debug], fn ->
-          assert Interface.resolve(state, "https://api.example.com/") == :direct
+          assert Interface.resolve(state, unique_url()) == :direct
         end)
 
       refute log =~ "PAC on"
