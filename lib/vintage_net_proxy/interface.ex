@@ -88,31 +88,29 @@ defmodule VintageNetProxy.Interface do
 
   Returns one of:
 
-    * `:unset` — no intent, or `:auto` intent with no URL to fetch yet
+    * `:unset` — no intent
     * `:direct` — direct mode
     * `{:manual, descriptor}` — explicit proxy from manual mode
     * `{:auto, :ready}` — auto mode, PAC script loaded
     * `{:auto, {:error, reason}}` — auto mode, last fetch attempt failed
+    * `{:auto, :no_url}` — auto mode, but no PAC URL is available
+      (no `:pac_url`, no DHCP wpad option, no DHCP domain to derive
+      one from). Stays here until the network advertises something
+      to fetch.
   """
-  def value(state) do
-    case state.intent do
-      %{mode: :direct} ->
-        :direct
+  def value(%{intent: nil}), do: :unset
+  def value(%{intent: %{mode: :direct}}), do: :direct
+  def value(%{intent: %{mode: :manual} = m}), do: {:manual, Config.to_descriptor(m)}
 
-      %{mode: :manual} = m ->
-        {:manual, Config.to_descriptor(m)}
+  def value(%{intent: %{mode: :auto}, pac_script: script}) when is_binary(script),
+    do: {:auto, :ready}
 
-      %{mode: :auto} ->
-        cond do
-          not is_nil(state.pac_script) -> {:auto, :ready}
-          not is_nil(state.pac_fetch_error) -> {:auto, {:error, state.pac_fetch_error}}
-          true -> :unset
-        end
+  def value(%{intent: %{mode: :auto}, pac_fetch_error: reason}) when not is_nil(reason),
+    do: {:auto, {:error, reason}}
 
-      _ ->
-        :unset
-    end
-  end
+  def value(%{intent: %{mode: :auto}}), do: {:auto, :no_url}
+
+  def value(_), do: :unset
 
   @doc "Evaluate the loaded PAC against `url` (or apply manual/direct intent)."
   def resolve(state, url) do

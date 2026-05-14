@@ -58,8 +58,8 @@ defmodule VintageNetProxy.InterfaceTest do
                {:auto, :ready}
     end
 
-    test ":auto with no script and no fetch error → :unset" do
-      assert Interface.value(iface(intent: %{mode: :auto})) == :unset
+    test ":auto with no script, no error, no URL source → {:auto, :no_url}" do
+      assert Interface.value(iface(intent: %{mode: :auto})) == {:auto, :no_url}
     end
 
     test ":auto with no script and a fetch error → {:auto, {:error, reason}}" do
