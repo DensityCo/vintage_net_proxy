@@ -181,12 +181,10 @@ defmodule VintageNetProxy do
 
   Error reasons:
 
-    * `:pac_default_direct` — PAC mode active, no rule matched, the
-      script's default is `DIRECT`. Possibly intentional on an open
-      network, suspicious on a mandatory-proxy deployment.
-    * `:pac_fallthrough` — PAC mode active, no rule matched and no
-      default extractable. Script is malformed or uses syntax we
-      can't evaluate.
+    * `:pac_fallthrough` — PAC mode active, the script matched no
+      rule *and* had no extractable default. Malformed script or
+      syntax this evaluator silently skips. `VintageNetProxy.PAC`
+      logs at `:warning` when this happens.
     * `:no_pac_url` — auto mode but no `:pac_url`, no DHCP wpad, no
       DHCP domain.
     * `{:pac_fetch_failed, reason}` — auto mode, the last fetch
@@ -194,8 +192,11 @@ defmodule VintageNetProxy do
     * `:no_proxy_resolved` — no eligible interface (no intent, or
       none up).
 
-  Rules that explicitly return `DIRECT` (internal-host bypass) are
-  still `{:ok, :direct}` — the PAC author asked for that.
+  PAC results — whether they came from a matched rule or the
+  script's default — are returned faithfully as `{:ok, directive}`.
+  "The script's default is `DIRECT`" is information about what the
+  script says, not an error; deployments that consider default-
+  DIRECT misconfigured should lint the PAC source.
   """
   @type resolve_result :: {:ok, resolved()} | {:error, term()}
 

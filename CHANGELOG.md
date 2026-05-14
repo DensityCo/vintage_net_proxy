@@ -57,24 +57,24 @@ proxy at `["proxy", "config"]`.
 * Re-probes on: startup, every `:interval` ms, `["proxy", "config"]`
   changes, `["proxy", "pac_revision"]` ticks.
 
-### PAC source distinction & resolve result shape
+### PAC return shape
 
-* `PAC.find_proxy/2` returns a `{source, directive}` tuple — `{:rule, _}`
-  when a rule fired, `{:default, _}` when no rule matched and the script
-  had a default, `{:fallthrough, :direct}` when neither applied. Lets the
-  library tell "PAC intentionally said `DIRECT`" apart from "PAC silently
-  fell through to `DIRECT`."
-* `VintageNetProxy.resolve/1` returns `{:ok, directive}` for a decisive
-  answer and `{:error, reason}` when the library can't confidently route
-  the URL — `:pac_default_direct`, `:pac_fallthrough`, `:no_pac_url`,
+* `PAC.find_proxy/2` returns `{:ok, directive}` when the script
+  produces a decisive answer (a rule's predicate matched, or the
+  script's default fired) and `{:error, :pac_fallthrough}` when
+  it doesn't (no rule matched *and* no default extractable —
+  malformed script or unsupported syntax). The fall-through case
+  is logged at `:warning` by `VintageNetProxy.PAC` itself.
+* `VintageNetProxy.resolve/1` returns `{:ok, directive}` for a
+  decisive answer and `{:error, reason}` when the library can't
+  confidently route the URL — `:pac_fallthrough`, `:no_pac_url`,
   `{:pac_fetch_failed, _}`, `:no_proxy_resolved`. Callers explicitly
   decide on each error case (refuse / wait / alert / fall back to
   direct); the library never silently bypasses a mandatory proxy.
-* The fall-through log uses the source tag to pick a level: `:rule` is
-  silent (working as designed), `{:default, :direct}` logs at `:info`,
-  `:fallthrough` logs at `:warning`. Operators investigating "why did
-  this request go direct" see the suspicious cases without enabling
-  debug.
+* The rule-vs-default distinction is PAC's internal business — both
+  return `{:ok, directive}` faithfully. "The script's default is
+  `DIRECT`" is information, not an error; deployments that consider
+  it misconfigured should lint the PAC source.
 
 ### Public API
 

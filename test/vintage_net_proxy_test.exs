@@ -192,7 +192,7 @@ defmodule VintageNetProxyTest do
                {:ok, %{scheme: :http, host: "p", port: 80}}
     end
 
-    test "PAC with default DIRECT, no matching rule → {:error, :pac_default_direct}",
+    test "PAC with default DIRECT, no matching rule → {:ok, :direct} (script said so)",
          %{config_property: prop, iface: iface} do
       port = serve_once(~s|function FindProxyForURL(url, host) { return "DIRECT"; }|)
 
@@ -203,8 +203,7 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNetProxy.resolve("https://anything/") ==
-               {:error, :pac_default_direct}
+      assert VintageNetProxy.resolve("https://anything/") == {:ok, :direct}
     end
 
     test "PAC with a matching DIRECT rule → {:ok, :direct} (intentional bypass)",

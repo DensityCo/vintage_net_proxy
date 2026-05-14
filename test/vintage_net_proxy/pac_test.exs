@@ -1,47 +1,49 @@
 defmodule VintageNetProxy.PACTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias VintageNetProxy.PAC
 
   describe "find_proxy/2 — directive parsing" do
-    test "static DIRECT comes from the script's default" do
+    test "static DIRECT" do
       script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
-      assert PAC.find_proxy(script, "https://example.com/") == {:default, :direct}
+      assert PAC.find_proxy(script, "https://example.com/") == {:ok, :direct}
     end
 
-    test "static PROXY → :http descriptor (default-sourced)" do
+    test "static PROXY → :http descriptor" do
       script = ~s|function FindProxyForURL(url, host) { return "PROXY proxy.example:8080"; }|
 
       assert PAC.find_proxy(script, "https://example.com/") ==
-               {:default, %{scheme: :http, host: "proxy.example", port: 8080}}
+               {:ok, %{scheme: :http, host: "proxy.example", port: 8080}}
     end
 
     test "HTTPS directive" do
       script = ~s|function FindProxyForURL(url, host) { return "HTTPS secure.example:443"; }|
 
       assert PAC.find_proxy(script, "https://example.com/") ==
-               {:default, %{scheme: :https, host: "secure.example", port: 443}}
+               {:ok, %{scheme: :https, host: "secure.example", port: 443}}
     end
 
     test "SOCKS5 directive" do
       script = ~s|function FindProxyForURL(url, host) { return "SOCKS5 s.example:1080"; }|
 
       assert PAC.find_proxy(script, "https://example.com/") ==
-               {:default, %{scheme: :socks5, host: "s.example", port: 1080}}
+               {:ok, %{scheme: :socks5, host: "s.example", port: 1080}}
     end
 
     test "SOCKS without version → :socks4" do
       script = ~s|function FindProxyForURL(url, host) { return "SOCKS s4.example:1080"; }|
 
       assert PAC.find_proxy(script, "https://example.com/") ==
-               {:default, %{scheme: :socks4, host: "s4.example", port: 1080}}
+               {:ok, %{scheme: :socks4, host: "s4.example", port: 1080}}
     end
 
     test "SOCKS4 explicit" do
       script = ~s|function FindProxyForURL(url, host) { return "SOCKS4 s.example:1080"; }|
 
       assert PAC.find_proxy(script, "https://example.com/") ==
-               {:default, %{scheme: :socks4, host: "s.example", port: 1080}}
+               {:ok, %{scheme: :socks4, host: "s.example", port: 1080}}
     end
 
     test "fallback list returns the first recognized entry" do
@@ -49,14 +51,14 @@ defmodule VintageNetProxy.PACTest do
         ~s|function FindProxyForURL(url, host) { return "PROXY a.example:1; PROXY b.example:2; DIRECT"; }|
 
       assert PAC.find_proxy(script, "https://x.example/") ==
-               {:default, %{scheme: :http, host: "a.example", port: 1}}
+               {:ok, %{scheme: :http, host: "a.example", port: 1}}
     end
 
     test "fallback list mixed schemes — first one wins" do
       script = ~s|function FindProxyForURL(url, host) { return "SOCKS5 s:1080; PROXY p:8080"; }|
 
       assert PAC.find_proxy(script, "https://x/") ==
-               {:default, %{scheme: :socks5, host: "s", port: 1080}}
+               {:ok, %{scheme: :socks5, host: "s", port: 1080}}
     end
   end
 
@@ -72,18 +74,18 @@ defmodule VintageNetProxy.PACTest do
       {:ok, script: script}
     end
 
-    test "matches glob → :rule with the proxy", %{script: s} do
+    test "matches glob → the proxy", %{script: s} do
       assert PAC.find_proxy(s, "https://api.corp.example/path") ==
-               {:rule, %{scheme: :http, host: "corp-proxy", port: 8080}}
+               {:ok, %{scheme: :http, host: "corp-proxy", port: 8080}}
     end
 
     test "non-match → falls through to default", %{script: s} do
-      assert PAC.find_proxy(s, "https://google.com/") == {:default, :direct}
+      assert PAC.find_proxy(s, "https://google.com/") == {:ok, :direct}
     end
   end
 
   describe "find_proxy/2 — dnsDomainIs" do
-    test "suffix match → :rule" do
+    test "suffix match → proxy" do
       script = """
       function FindProxyForURL(url, host) {
         if (dnsDomainIs(host, ".internal.example")) return "PROXY p:3128";
@@ -92,9 +94,9 @@ defmodule VintageNetProxy.PACTest do
       """
 
       assert PAC.find_proxy(script, "https://x.internal.example/") ==
-               {:rule, %{scheme: :http, host: "p", port: 3128}}
+               {:ok, %{scheme: :http, host: "p", port: 3128}}
 
-      assert PAC.find_proxy(script, "https://x.external.example/") == {:default, :direct}
+      assert PAC.find_proxy(script, "https://x.external.example/") == {:ok, :direct}
     end
   end
 
@@ -107,10 +109,10 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "http://external.com/") ==
-               {:default, %{scheme: :http, host: "p", port: 8080}}
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
     end
   end
 
@@ -125,16 +127,16 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "https://api.corp.example/") ==
-               {:rule, %{scheme: :http, host: "corp", port: 8080}}
+               {:ok, %{scheme: :http, host: "corp", port: 8080}}
 
       assert PAC.find_proxy(script, "https://x.vpn.example/") ==
-               {:rule, %{scheme: :socks5, host: "vpn", port: 1080}}
+               {:ok, %{scheme: :socks5, host: "vpn", port: 1080}}
 
       assert PAC.find_proxy(script, "https://google.com/") ==
-               {:default, %{scheme: :http, host: "default", port: 80}}
+               {:ok, %{scheme: :http, host: "default", port: 80}}
     end
   end
 
@@ -143,10 +145,10 @@ defmodule VintageNetProxy.PACTest do
       script =
         ~s|function FindProxyForURL(url, host) { if (host == "intranet") return "DIRECT"; return "PROXY p:80"; }|
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "http://elsewhere/") ==
-               {:default, %{scheme: :http, host: "p", port: 80}}
+               {:ok, %{scheme: :http, host: "p", port: 80}}
     end
   end
 
@@ -163,40 +165,40 @@ defmodule VintageNetProxy.PACTest do
     }
     """
 
-    test "plain hostnames bypass via :rule" do
-      assert PAC.find_proxy(@wpad, "http://intranet/") == {:rule, :direct}
-      assert PAC.find_proxy(@wpad, "http://buildserver/jobs") == {:rule, :direct}
+    test "plain hostnames bypass" do
+      assert PAC.find_proxy(@wpad, "http://intranet/") == {:ok, :direct}
+      assert PAC.find_proxy(@wpad, "http://buildserver/jobs") == {:ok, :direct}
     end
 
-    test "loopback bypasses via :rule" do
-      assert PAC.find_proxy(@wpad, "http://localhost:8080/") == {:rule, :direct}
+    test "loopback bypasses" do
+      assert PAC.find_proxy(@wpad, "http://localhost:8080/") == {:ok, :direct}
     end
 
-    test "internal corp domains bypass via :rule" do
-      assert PAC.find_proxy(@wpad, "https://wiki.corp.example.com/") == {:rule, :direct}
-      assert PAC.find_proxy(@wpad, "https://api.internal.example.com/v1/") == {:rule, :direct}
+    test "internal corp domains bypass" do
+      assert PAC.find_proxy(@wpad, "https://wiki.corp.example.com/") == {:ok, :direct}
+      assert PAC.find_proxy(@wpad, "https://api.internal.example.com/v1/") == {:ok, :direct}
     end
 
-    test "S3 buckets bypass via :rule" do
-      assert PAC.find_proxy(@wpad, "https://my-bucket.s3.amazonaws.com/") == {:rule, :direct}
+    test "S3 buckets bypass" do
+      assert PAC.find_proxy(@wpad, "https://my-bucket.s3.amazonaws.com/") == {:ok, :direct}
     end
 
-    test "trusted-partner traffic gets a dedicated proxy via :rule" do
+    test "trusted-partner traffic gets a dedicated proxy" do
       assert PAC.find_proxy(@wpad, "https://api.trusted-partner.com/") ==
-               {:rule, %{scheme: :http, host: "trusted-proxy", port: 3128}}
+               {:ok, %{scheme: :http, host: "trusted-proxy", port: 3128}}
     end
 
-    test "general internet traffic falls to the :default fallback list" do
+    test "general internet traffic falls to the default fallback list" do
       assert PAC.find_proxy(@wpad, "https://www.google.com/") ==
-               {:default, %{scheme: :http, host: "primary-proxy", port: 8080}}
+               {:ok, %{scheme: :http, host: "primary-proxy", port: 8080}}
 
       assert PAC.find_proxy(@wpad, "https://github.com/") ==
-               {:default, %{scheme: :http, host: "primary-proxy", port: 8080}}
+               {:ok, %{scheme: :http, host: "primary-proxy", port: 8080}}
     end
 
     test "rule precedence: first matching if wins" do
-      assert PAC.find_proxy(@wpad, "https://api.corp.example.com/") == {:rule, :direct}
-      assert PAC.find_proxy(@wpad, "https://logs.s3.amazonaws.com/") == {:rule, :direct}
+      assert PAC.find_proxy(@wpad, "https://api.corp.example.com/") == {:ok, :direct}
+      assert PAC.find_proxy(@wpad, "https://logs.s3.amazonaws.com/") == {:ok, :direct}
     end
   end
 
@@ -212,12 +214,12 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
-      assert PAC.find_proxy(script, "https://wiki.mozilla.org/") == {:rule, :direct}
-      assert PAC.find_proxy(script, "http://10.1.2.3/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
+      assert PAC.find_proxy(script, "https://wiki.mozilla.org/") == {:ok, :direct}
+      assert PAC.find_proxy(script, "http://10.1.2.3/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "https://github.com/") ==
-               {:default, %{scheme: :http, host: "proxy.mozilla.org", port: 8080}}
+               {:ok, %{scheme: :http, host: "proxy.mozilla.org", port: 8080}}
     end
 
     test "&& with negation" do
@@ -230,13 +232,13 @@ defmodule VintageNetProxy.PACTest do
       """
 
       assert PAC.find_proxy(script, "http://api.corp/") ==
-               {:rule, %{scheme: :http, host: "corp-proxy", port: 8080}}
+               {:ok, %{scheme: :http, host: "corp-proxy", port: 8080}}
 
       # internal.* hosts negate the corp rule, fall through to default
-      assert PAC.find_proxy(script, "http://internal.corp/") == {:default, :direct}
+      assert PAC.find_proxy(script, "http://internal.corp/") == {:ok, :direct}
 
       # non-corp host doesn't even reach the rule
-      assert PAC.find_proxy(script, "http://github.com/") == {:default, :direct}
+      assert PAC.find_proxy(script, "http://github.com/") == {:ok, :direct}
     end
   end
 
@@ -250,10 +252,10 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "http://google.com/") ==
-               {:default, %{scheme: :http, host: "p", port: 8080}}
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
     end
 
     test "inline block comment between predicate and return is stripped" do
@@ -264,7 +266,7 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
     end
 
     test "multi-line block comment is stripped" do
@@ -277,10 +279,10 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "http://google.com/") ==
-               {:default, %{scheme: :http, host: "p", port: 8080}}
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
     end
 
     test "comments scattered through a realistic WPAD don't break rule chaining" do
@@ -296,11 +298,11 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://intranet/") == {:rule, :direct}
-      assert PAC.find_proxy(script, "https://wiki.corp.acme/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://intranet/") == {:ok, :direct}
+      assert PAC.find_proxy(script, "https://wiki.corp.acme/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "https://github.com/") ==
-               {:default, %{scheme: :http, host: "proxy.acme", port: 8080}}
+               {:ok, %{scheme: :http, host: "proxy.acme", port: 8080}}
     end
 
     test "line comment does not eat into the next rule" do
@@ -312,32 +314,46 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://a/") == {:rule, :direct}
+      assert PAC.find_proxy(script, "http://a/") == {:ok, :direct}
 
       assert PAC.find_proxy(script, "http://b/") ==
-               {:rule, %{scheme: :http, host: "p", port: 80}}
+               {:ok, %{scheme: :http, host: "p", port: 80}}
 
       assert PAC.find_proxy(script, "http://c/") ==
-               {:default, %{scheme: :http, host: "q", port: 90}}
+               {:ok, %{scheme: :http, host: "q", port: 90}}
     end
 
-    test "comment-only script falls through (no rules, no default)" do
-      assert PAC.find_proxy("// just a header\n/* nothing here */", "http://x/") ==
-               {:fallthrough, :direct}
+    test "comment-only script falls through" do
+      log =
+        capture_log([level: :warning], fn ->
+          assert PAC.find_proxy("// just a header\n/* nothing here */", "http://x/") ==
+                   {:error, :pac_fallthrough}
+        end)
+
+      assert log =~ "no rules and no default matched"
+      assert log =~ "http://x/"
     end
   end
 
   describe "find_proxy/2 — robustness" do
-    test "empty script → :fallthrough (no rules, no default)" do
-      assert PAC.find_proxy("", "http://x/") == {:fallthrough, :direct}
+    test "empty script → {:error, :pac_fallthrough} and logs at :warning" do
+      log =
+        capture_log([level: :warning], fn ->
+          assert PAC.find_proxy("", "http://x/") == {:error, :pac_fallthrough}
+        end)
+
+      assert log =~ "no rules and no default matched"
+      assert log =~ "http://x/"
     end
 
-    test "malformed directive → :default :direct (parser collapses unparseable to direct)" do
+    test "malformed default directive parses to :direct → still {:ok, :direct}" do
+      # `PROXY without_port` is unparseable; parse_directive collapses to :direct.
+      # PAC still treats this as a default that fired; it doesn't reach :pac_fallthrough.
       script = ~s|function FindProxyForURL(url, host) { return "PROXY without_port"; }|
-      assert PAC.find_proxy(script, "http://x/") == {:default, :direct}
+      assert PAC.find_proxy(script, "http://x/") == {:ok, :direct}
     end
 
-    test "unsupported predicate → ignored, falls to default" do
+    test "unsupported predicate → ignored; falls to default" do
       script = """
       function FindProxyForURL(url, host) {
         if (myIpAddress() == "10.0.0.1") return "PROXY weird:1";
@@ -345,7 +361,7 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "http://x/") == {:default, :direct}
+      assert PAC.find_proxy(script, "http://x/") == {:ok, :direct}
     end
 
     test "unparseable URL → empty host, predicates miss, falls to default" do
@@ -356,7 +372,7 @@ defmodule VintageNetProxy.PACTest do
       }
       """
 
-      assert PAC.find_proxy(script, "not-a-url") == {:default, :direct}
+      assert PAC.find_proxy(script, "not-a-url") == {:ok, :direct}
     end
   end
 end
