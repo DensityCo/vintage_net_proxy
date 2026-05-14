@@ -9,6 +9,9 @@ defmodule VintageNetProxy.InterfaceTest do
 
   alias VintageNetProxy.Interface
 
+  # Helper used by tests that want to swallow PAC's :pac_fallthrough warning.
+  defp silently(fun), do: capture_log(fun)
+
   defp iface(opts) do
     %Interface{
       iface: Keyword.get(opts, :iface, "eth0"),
@@ -113,14 +116,17 @@ defmodule VintageNetProxy.InterfaceTest do
                {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
-    test "PAC default DIRECT → {:error, :pac_default_direct}" do
+    test "PAC default DIRECT → {:ok, :direct} (script said so)" do
       state = iface(intent: %{mode: :auto}, pac_script: @pac_default_direct)
-      assert Interface.resolve(state, "http://anything/") == {:error, :pac_default_direct}
+      assert Interface.resolve(state, "http://anything/") == {:ok, :direct}
     end
 
     test "PAC fall-through (empty script) → {:error, :pac_fallthrough}" do
       state = iface(intent: %{mode: :auto}, pac_script: "")
-      assert Interface.resolve(state, "http://anything/") == {:error, :pac_fallthrough}
+
+      silently(fn ->
+        assert Interface.resolve(state, "http://anything/") == {:error, :pac_fallthrough}
+      end)
     end
 
     test ":auto with no PAC URL → {:error, :no_pac_url}" do
@@ -138,77 +144,6 @@ defmodule VintageNetProxy.InterfaceTest do
     test "no intent → {:error, :no_proxy_resolved}" do
       assert Interface.resolve(iface(intent: nil), "http://anything/") ==
                {:error, :no_proxy_resolved}
-    end
-  end
-
-  describe "resolve/2 — diagnostic logging" do
-    @pac_default_direct ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
-    @pac_default_proxy ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
-    @pac_rule_direct ~s|function FindProxyForURL(url, host) { if (host == "x.example") return "DIRECT"; return "PROXY p.corp:8080"; }|
-    @pac_fallthrough ""
-
-    test "{:default, :direct} logs at :info with iface + url" do
-      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_default_direct)
-
-      log =
-        capture_log([level: :info], fn ->
-          Interface.resolve(state, "https://api.example.com/")
-        end)
-
-      assert log =~ "PAC default on wlan0 evaluated to DIRECT"
-      assert log =~ "https://api.example.com/"
-    end
-
-    test "{:rule, :direct} does NOT log (intentional bypass via a rule)" do
-      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_rule_direct)
-
-      log =
-        capture_log([level: :debug], fn ->
-          Interface.resolve(state, "http://x.example/")
-        end)
-
-      refute log =~ "PAC"
-    end
-
-    test "{:fallthrough, _} logs at :warning" do
-      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_fallthrough)
-
-      log =
-        capture_log([level: :warning], fn ->
-          Interface.resolve(state, "https://api.example.com/")
-        end)
-
-      assert log =~ "PAC on wlan0 matched no rules and had no default"
-      assert log =~ "https://api.example.com/"
-    end
-
-    test "does not log when PAC resolves to a proxy descriptor" do
-      state = iface(intent: %{mode: :auto}, pac_script: @pac_default_proxy)
-
-      log =
-        capture_log([level: :info], fn ->
-          Interface.resolve(state, "https://api.example.com/")
-        end)
-
-      refute log =~ "evaluated to DIRECT"
-    end
-
-    test "does not log for :direct mode (no PAC was consulted)" do
-      log =
-        capture_log([level: :info], fn ->
-          Interface.resolve(iface(intent: %{mode: :direct}), "https://api.example.com/")
-        end)
-
-      refute log =~ "PAC"
-    end
-
-    test "does not log when :auto has no pac_script (degraded path)" do
-      log =
-        capture_log([level: :info], fn ->
-          Interface.resolve(iface(intent: %{mode: :auto}), "https://api.example.com/")
-        end)
-
-      refute log =~ "PAC"
     end
   end
 

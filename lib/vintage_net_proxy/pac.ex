@@ -32,25 +32,22 @@ defmodule VintageNetProxy.PAC do
 
   ## Result shape
 
-  `find_proxy/2` returns `{source, directive}` so callers can tell *how*
-  the script reached its answer:
+  `find_proxy/2` returns `{:ok, directive}` when the script produced a
+  decisive answer — either a rule's predicate matched, or the script's
+  default fired — and `{:error, :pac_fallthrough}` when neither
+  happened (no rule matched *and* no default could be extracted). The
+  fall-through case is logged at `:warning` because it indicates the
+  script was malformed or used syntax this evaluator silently skips;
+  the parser itself couldn't reach a verdict.
 
-    * `{:rule, directive}` — a rule's predicate matched; the directive
-      is whatever that rule returned. The author intentionally routed
-      this URL through (or around) the proxy.
-    * `{:default, directive}` — no rule matched; the directive is the
-      script's default (the last unguarded `return "..."`). The
-      author wrote a default, even if that default is `DIRECT`.
-    * `{:fallthrough, :direct}` — no rule matched *and* the script
-      has no extractable default. We synthesize `:direct` to keep
-      callers working, but this is usually a sign of a malformed
-      script or one that uses syntax this evaluator silently skips.
-
-  `VintageNetProxy.resolve/1` uses the source tag to return
-  `{:ok, directive}` for `:rule` matches and `{:default, descriptor}`,
-  and `{:error, :pac_default_direct | :pac_fallthrough}` for the
-  cases that silently bypass a mandatory proxy.
+  The library treats the rule vs. default distinction as PAC's
+  internal business. "PAC's default is `DIRECT`" is just what the
+  script says — whether that's wrong for a given deployment is a
+  policy question and belongs in CI-level lints over the PAC source,
+  not in a runtime branch here.
   """
+
+  require Logger
 
   alias VintageNetProxy.PAC.Predicate
 
@@ -62,15 +59,12 @@ defmodule VintageNetProxy.PAC do
 
   @type directive :: :direct | proxy_descriptor()
 
-  @typedoc """
-  Where a `find_proxy/2` answer came from. See the module docs.
-  """
-  @type source :: :rule | :default | :fallthrough
+  @type result :: {:ok, directive()} | {:error, :pac_fallthrough}
 
   @if_re ~r/if\s*\(\s*(.+?)\s*\)\s*\{?\s*return\s*["']([^"']+)["']/us
   @return_re ~r/return\s*["']([^"']+)["']/u
 
-  @spec find_proxy(String.t(), String.t()) :: {source(), directive()}
+  @spec find_proxy(String.t(), String.t()) :: result()
   def find_proxy(script, url) when is_binary(script) and is_binary(url) do
     script = strip_comments(script)
     host = host_from_url(url)
@@ -82,10 +76,20 @@ defmodule VintageNetProxy.PAC do
       end)
 
     cond do
-      matched -> {:rule, parse_directive(matched)}
-      default = extract_default(script) -> {:default, parse_directive(default)}
-      true -> {:fallthrough, :direct}
+      matched -> {:ok, parse_directive(matched)}
+      default = extract_default(script) -> {:ok, parse_directive(default)}
+      true -> fallthrough(url)
     end
+  end
+
+  defp fallthrough(url) do
+    Logger.warning(
+      "VintageNetProxy.PAC: no rules and no default matched for #{inspect(url)}",
+      pac: :fallthrough,
+      url: url
+    )
+
+    {:error, :pac_fallthrough}
   end
 
   # JS-style comments break the rule-extraction regex when they sit between

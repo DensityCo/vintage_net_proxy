@@ -90,13 +90,12 @@ back to a direct connection.
 ```elixir
 defp connect(url) do
   case VintageNetProxy.resolve(url) do
-    {:ok, :direct}                  -> direct_connect(url)
-    {:ok, %{} = descriptor}         -> proxied_connect(url, descriptor)
-    {:error, :pac_default_direct}   -> alert_or_wait()       # PAC default is DIRECT
-    {:error, :pac_fallthrough}      -> alert_or_wait()       # script is malformed
-    {:error, :no_pac_url}           -> wait_for_dhcp()
+    {:ok, :direct}                   -> direct_connect(url)
+    {:ok, %{} = descriptor}          -> proxied_connect(url, descriptor)
+    {:error, :pac_fallthrough}       -> alert_or_wait()       # script is malformed
+    {:error, :no_pac_url}            -> wait_for_dhcp()
     {:error, {:pac_fetch_failed, _}} -> wait_or_alert()
-    {:error, :no_proxy_resolved}    -> wait_for_interface()
+    {:error, :no_proxy_resolved}     -> wait_for_interface()
   end
 end
 ```
@@ -144,24 +143,31 @@ case proxy do
 end
 ```
 
-### Why `:direct` shows up under three different sources
+### Why `:direct` and how PAC reports it
 
-Behind the scenes, a PAC script can hand back `DIRECT` via three
-distinct paths and the library labels each so the right diagnostic
-gets emitted:
+A PAC script can hand back `DIRECT` two ways: a rule's predicate
+matched and that rule returned `"DIRECT"`, or no rule matched and
+the script's catch-all default was `"DIRECT"`. Both are
+**information about what the script says**, not errors — they both
+come back as `{:ok, :direct}`. Whether default-DIRECT is wrong for
+your deployment depends on the deployment; the honest place to
+check is a lint over the PAC source ("for external URLs, our PAC
+must hit a `PROXY` directive, not `DIRECT`"), not a runtime branch
+in the library.
 
-| Source | Resolve return | Meaning |
-|---|---|---|
-| `:rule` | `{:ok, :direct}` | A rule's predicate matched and returned `DIRECT`. Intentional bypass (internal hosts). |
-| `:default` | `{:error, :pac_default_direct}` | No rule matched; the script's default is `DIRECT`. Possibly intentional, possibly a missing `PROXY` default. |
-| `:fallthrough` | `{:error, :pac_fallthrough}` | No rule matched *and* no default could be extracted. Malformed script, or every predicate uses syntax this evaluator silently skips. |
+The one case the library does flag as an error is when the script
+*structurally* can't reach a verdict — no rule matched *and* no
+default could be extracted (malformed script, or every predicate
+uses syntax this evaluator silently skips). That returns
+`{:error, :pac_fallthrough}` and `VintageNetProxy.PAC` emits a
+`Logger.warning`:
 
-The library logs differently per source so operators see the
-suspicious cases without enabling debug:
+```
+[warning] VintageNetProxy.PAC: no rules and no default matched for "https://api.example.com/"
+```
 
-- `:rule` → silent. Working as designed.
-- `{:default, :direct}` → `Logger.info` (`"PAC default on wlan0 evaluated to DIRECT for ..."`).
-- `:fallthrough` → `Logger.warning` (`"PAC on wlan0 matched no rules and had no default; defaulting to DIRECT for ..."`).
+Operators tailing logs see the parser-level diagnostic; consumers
+get the matching error tuple and decide downstream.
 
 ## Configuration
 

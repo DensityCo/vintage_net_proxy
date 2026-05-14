@@ -1,6 +1,8 @@
 defmodule VintageNetProxy.RosterTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias VintageNetProxy.{Interface, Roster}
 
   defp iface(opts) do
@@ -157,7 +159,7 @@ defmodule VintageNetProxy.RosterTest do
                {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
-    test "active :auto with PAC default DIRECT → {:error, :pac_default_direct}" do
+    test "active :auto with PAC default DIRECT → {:ok, :direct} (script said so)" do
       script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
 
       s =
@@ -170,7 +172,7 @@ defmodule VintageNetProxy.RosterTest do
           )
         ])
 
-      assert Roster.resolve(s, "https://x/") == {:error, :pac_default_direct}
+      assert Roster.resolve(s, "https://x/") == {:ok, :direct}
     end
 
     test "active :auto with PAC fall-through → {:error, :pac_fallthrough}" do
@@ -179,7 +181,9 @@ defmodule VintageNetProxy.RosterTest do
           iface(iface: "eth0", intent: %{mode: :auto}, connection: :internet, pac_script: "")
         ])
 
-      assert Roster.resolve(s, "https://x/") == {:error, :pac_fallthrough}
+      capture_log(fn ->
+        assert Roster.resolve(s, "https://x/") == {:error, :pac_fallthrough}
+      end)
     end
   end
 

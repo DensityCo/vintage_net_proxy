@@ -136,26 +136,21 @@ defmodule VintageNetProxy.Interface do
 
   Error reasons:
 
-    * `:pac_default_direct` — PAC matched no rule, the script's
-      default is `DIRECT`. Could be intentional (open network), or
-      a misconfigured corporate PAC missing a `PROXY` default.
     * `:pac_fallthrough` — PAC matched no rule *and* no extractable
       default. The script is malformed or uses syntax this evaluator
-      silently skips.
+      silently skips. `VintageNetProxy.PAC` logs at `:warning` when
+      this happens.
     * `:no_pac_url` — auto mode, no `:pac_url`, no DHCP wpad, no
       DHCP domain to derive one from.
     * `{:pac_fetch_failed, reason}` — auto mode, the last fetch
       attempt failed.
     * `:no_proxy_resolved` — no intent on this interface.
 
-  Rules that explicitly return `DIRECT` (e.g. internal-host bypass
-  patterns) are still `{:ok, :direct}` — the PAC author asked for
-  that.
-
-  As a side-effect, the function logs at `:info` for
-  `:pac_default_direct` and at `:warning` for `:pac_fallthrough` so
-  operators see those cases in logs even when the caller silently
-  collapses the error to a direct connection.
+  PAC results — whether they came from a matched rule or from the
+  script's default — are returned faithfully as `{:ok, directive}`.
+  "The script's default is `DIRECT`" is information about what the
+  script says, not an error; deployments that consider default-DIRECT
+  misconfigured should lint the PAC source.
   """
   @spec resolve(t(), String.t()) :: resolve_result()
   def resolve(state, url)
@@ -165,9 +160,9 @@ defmodule VintageNetProxy.Interface do
   def resolve(%{intent: %{mode: :manual} = m}, _url),
     do: {:ok, Config.to_descriptor(m)}
 
-  def resolve(%{intent: %{mode: :auto}, pac_script: script} = state, url)
+  def resolve(%{intent: %{mode: :auto}, pac_script: script}, url)
       when is_binary(script),
-      do: PAC.find_proxy(script, url) |> handle_pac_result(state.iface, url)
+      do: PAC.find_proxy(script, url)
 
   def resolve(%{intent: %{mode: :auto}, pac_fetch_error: e}, _url)
       when not is_nil(e),
@@ -176,40 +171,6 @@ defmodule VintageNetProxy.Interface do
   def resolve(%{intent: %{mode: :auto}}, _url), do: {:error, :no_pac_url}
 
   def resolve(_state, _url), do: {:error, :no_proxy_resolved}
-
-  # `PAC.find_proxy/2` returns `{source, directive}` so we can tell
-  # *why* PAC produced its answer. Use the source tag to:
-  #
-  #   * Differentiate :ok from :error returns (only :rule and
-  #     :default-with-descriptor are decisive enough to claim :ok).
-  #   * Log the suspicious cases at a useful level so they're visible
-  #     even when the caller silently collapses the error to direct.
-  defp handle_pac_result({:rule, directive}, _iface, _url), do: {:ok, directive}
-
-  defp handle_pac_result({:default, :direct}, iface, url) do
-    Logger.info(
-      "VintageNetProxy: PAC default on #{iface} evaluated to DIRECT for #{inspect(url)}",
-      pac: :default_direct,
-      iface: iface,
-      url: url
-    )
-
-    {:error, :pac_default_direct}
-  end
-
-  defp handle_pac_result({:default, descriptor}, _iface, _url), do: {:ok, descriptor}
-
-  defp handle_pac_result({:fallthrough, _directive}, iface, url) do
-    Logger.warning(
-      "VintageNetProxy: PAC on #{iface} matched no rules and had no default; " <>
-        "defaulting to DIRECT for #{inspect(url)}",
-      pac: :fallthrough,
-      iface: iface,
-      url: url
-    )
-
-    {:error, :pac_fallthrough}
-  end
 
   @doc "Introspection snapshot."
   def snapshot(state) do

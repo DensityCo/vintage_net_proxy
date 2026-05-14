@@ -147,11 +147,11 @@ defmodule VintageNetProxy.SelectorTest do
                {:ok, %{scheme: :http, host: "q", port: 1}}
     end
 
-    test "PAC default DIRECT → {:error, :pac_default_direct}", %{primary: iface} do
+    test "PAC default DIRECT → {:ok, :direct} (script said so)", %{primary: iface} do
       script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
       send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
 
-      assert Selector.resolve("https://x/") == {:error, :pac_default_direct}
+      assert Selector.resolve("https://x/") == {:ok, :direct}
     end
   end
 
