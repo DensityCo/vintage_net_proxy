@@ -4,6 +4,11 @@ defmodule VintageNetProxy.Application do
 
   @impl true
   def start(_type, _args) do
+    # Tracks URLs we've already surfaced a "PAC evaluated to DIRECT" log
+    # for. First occurrence per URL logs at :info; subsequent at :debug.
+    # See `VintageNetProxy.Interface.resolve/2`.
+    :ets.new(:vintage_net_proxy_pac_seen, [:set, :public, :named_table])
+
     children =
       if Application.get_env(:vintage_net_proxy, :start?, true) do
         interfaces = Application.get_env(:vintage_net_proxy, :interfaces, [])
