@@ -5,6 +5,8 @@ defmodule VintageNetProxy.InterfaceTest do
   """
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias VintageNetProxy.Interface
 
   defp iface(opts) do
@@ -100,6 +102,57 @@ defmodule VintageNetProxy.InterfaceTest do
 
     test ":auto without pac_script → :direct (degraded)" do
       assert Interface.resolve(iface(intent: %{mode: :auto}), "https://x/") == :direct
+    end
+  end
+
+  describe "resolve/2 — PAC fall-through diagnostics" do
+    @pac_direct ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
+    @pac_proxy ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
+
+    test "logs at :debug when PAC mode evaluates to :direct" do
+      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_direct)
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert Interface.resolve(state, "https://api.example.com/") == :direct
+        end)
+
+      assert log =~ "PAC on wlan0 evaluated to DIRECT"
+      assert log =~ "https://api.example.com/"
+    end
+
+    test "does not log when PAC mode evaluates to a proxy descriptor" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_proxy)
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert Interface.resolve(state, "https://api.example.com/") ==
+                   %{scheme: :http, host: "p.corp", port: 8080}
+        end)
+
+      refute log =~ "evaluated to DIRECT"
+    end
+
+    test "does not log for :direct mode (no PAC was consulted)" do
+      state = iface(intent: %{mode: :direct})
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert Interface.resolve(state, "https://api.example.com/") == :direct
+        end)
+
+      refute log =~ "PAC on"
+    end
+
+    test "does not log when :auto has no pac_script (degraded path)" do
+      state = iface(intent: %{mode: :auto})
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert Interface.resolve(state, "https://api.example.com/") == :direct
+        end)
+
+      refute log =~ "PAC on"
     end
   end
 
