@@ -115,12 +115,42 @@ defmodule VintageNetProxy.Interface do
   @doc "Evaluate the loaded PAC against `url` (or apply manual/direct intent)."
   def resolve(state, url) do
     case state.intent do
-      %{mode: :direct} -> :direct
-      %{mode: :manual} = m -> Config.to_descriptor(m)
-      %{mode: :auto} when is_binary(state.pac_script) -> PAC.find_proxy(state.pac_script, url)
-      _ -> :direct
+      %{mode: :direct} ->
+        :direct
+
+      %{mode: :manual} = m ->
+        Config.to_descriptor(m)
+
+      %{mode: :auto} when is_binary(state.pac_script) ->
+        state.pac_script
+        |> PAC.find_proxy(url)
+        |> log_pac_result(state.iface, url)
+
+      _ ->
+        :direct
     end
   end
+
+  # `PAC.find_proxy/2` can land on `:direct` from three different paths:
+  # the matching rule literally said `DIRECT`, the default branch was
+  # `DIRECT`, or the parser couldn't make sense of the rule and fell
+  # through. Application-side those look identical to "no PAC loaded"
+  # — which is the wrong diagnosis for a corporate device where a
+  # mandatory proxy was supposed to apply. Log the fall-through at
+  # debug so operators can enable it and immediately see which URLs
+  # are bypassing the proxy.
+  defp log_pac_result(:direct, iface, url) do
+    Logger.debug(
+      "VintageNetProxy: PAC on #{iface} evaluated to DIRECT for #{inspect(url)}",
+      pac: :direct,
+      iface: iface,
+      url: url
+    )
+
+    :direct
+  end
+
+  defp log_pac_result(result, _iface, _url), do: result
 
   @doc "Introspection snapshot."
   def snapshot(state) do

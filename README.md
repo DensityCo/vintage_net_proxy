@@ -133,6 +133,46 @@ intent yet) and from `{:auto, {:error, reason}}` (we tried to load
 the PAC and it failed), so consumers can give each case its own
 behavior — wait, alert, fall back to direct, etc.
 
+### Diagnosing "why did my request go direct?"
+
+`resolve/1` returning `:direct` collapses three operationally
+distinct cases: PAC explicitly said `DIRECT` for this URL, PAC fell
+through (no rule matched, or the script used a predicate this
+evaluator doesn't support and silently skipped the rule), or the
+device simply has no proxy resolved. The last is normal; the middle
+one is a misconfiguration that's invisible from outside.
+
+The library logs at `Logger.debug` whenever PAC mode evaluates to
+`:direct`, so operators investigating "why is this request bypassing
+the proxy" can flip the log level and immediately see whether PAC
+was even consulted:
+
+```
+[debug] VintageNetProxy: PAC on wlan0 evaluated to DIRECT for "https://api.example.com/"
+```
+
+Consumers that want a louder one-off warning the first time their
+own connect path falls through to direct on a PAC-managed network
+can detect it by pairing `resolve/1` with `get/0`:
+
+```elixir
+case VintageNetProxy.resolve(url) do
+  :direct ->
+    if match?({:auto, :ready}, VintageNetProxy.get()) do
+      Logger.warning("PAC active but evaluated DIRECT for #{url}")
+    end
+    direct_connect(url)
+
+  %{} = descriptor ->
+    proxied_connect(url, descriptor)
+end
+```
+
+Wrap that with your own dedup (ETS, a process flag, etc.) if you
+only want it once per startup or once per URL — the library can't
+know what counts as "first attempt" from your application's point
+of view.
+
 ## Configuration
 
 All proxy configuration is expressed as a `:proxy` field inside an
