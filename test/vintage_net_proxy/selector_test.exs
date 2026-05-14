@@ -70,10 +70,10 @@ defmodule VintageNetProxy.SelectorTest do
       assert Publisher.get() == {:auto, :ready}
     end
 
-    test "publishes :unset when :auto snapshot has no pac_script and no error",
+    test "publishes {:auto, :no_url} when :auto snapshot has no script, no error, no URL source",
          %{primary: iface} do
       send_snapshot(iface, intent: %{mode: :auto}, connection: :internet)
-      assert Publisher.get() == :unset
+      assert Publisher.get() == {:auto, :no_url}
     end
 
     test "publishes {:auto, {:error, reason}} when :auto snapshot has a fetch error",

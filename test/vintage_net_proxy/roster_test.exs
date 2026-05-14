@@ -61,9 +61,9 @@ defmodule VintageNetProxy.RosterTest do
       assert Roster.value(s) == {:auto, :ready}
     end
 
-    test "eligible :auto without pac_script or error → :unset" do
+    test "eligible :auto without script, error, or URL source → {:auto, :no_url}" do
       s = state([iface(iface: "eth0", intent: %{mode: :auto}, connection: :internet)])
-      assert Roster.value(s) == :unset
+      assert Roster.value(s) == {:auto, :no_url}
     end
 
     test "eligible :auto with a fetch error → {:auto, {:error, reason}}" do
@@ -195,7 +195,7 @@ defmodule VintageNetProxy.RosterTest do
       s = Roster.new(["eth0"], %{})
       snap = iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)
       s = Roster.put_iface(s, "eth0", snap)
-      assert Map.get(s.states, "eth0") == snap
+      assert Roster.get_iface(s, "eth0") == snap
       assert Roster.value(s) == :direct
     end
 
@@ -204,7 +204,7 @@ defmodule VintageNetProxy.RosterTest do
       s = state([old])
       new = iface(iface: "eth0", intent: nil, connection: :internet)
       s = Roster.put_iface(s, "eth0", new)
-      assert Map.get(s.states, "eth0") == new
+      assert Roster.get_iface(s, "eth0") == new
       assert Roster.value(s) == :unset
     end
 
@@ -212,7 +212,25 @@ defmodule VintageNetProxy.RosterTest do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
       ghost = iface(iface: "wlan0", intent: %{mode: :direct}, connection: :internet)
       s = Roster.put_iface(s, "wlan0", ghost)
-      refute Map.has_key?(s.states, "wlan0")
+      assert Roster.get_iface(s, "wlan0") == nil
+    end
+  end
+
+  describe "get_iface/2" do
+    test "returns the stored snapshot" do
+      snap = iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)
+      s = state([snap])
+      assert Roster.get_iface(s, "eth0") == snap
+    end
+
+    test "returns nil when no snapshot has been stored" do
+      s = Roster.new(["eth0"], %{})
+      assert Roster.get_iface(s, "eth0") == nil
+    end
+
+    test "returns nil for an interface not in the priority list" do
+      s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
+      assert Roster.get_iface(s, "wlan0") == nil
     end
   end
 

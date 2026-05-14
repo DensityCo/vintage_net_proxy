@@ -16,6 +16,9 @@ defmodule VintageNetProxy do
     * `:direct` — direct mode; bypass any proxy
     * `{:manual, descriptor}` — explicit proxy from manual mode
     * `{:auto, :ready}` — PAC loaded; call `resolve/1` per request
+    * `{:auto, :no_url}` — auto mode but no PAC URL is available
+      (no `:pac_url`, no DHCP wpad, no DHCP domain). Stays here until
+      the network advertises something to fetch.
     * `{:auto, {:error, reason}}` — PAC fetch failed; the cached
       failure stays until something invalidates it (URL changes,
       interface flaps, next external event re-fetches)
@@ -34,6 +37,7 @@ defmodule VintageNetProxy do
           :direct                -> {:noreply, connect_direct(state)}
           {:manual, desc}        -> {:noreply, connect_via(state, desc)}
           {:auto, :ready}        -> {:noreply, state}  # call resolve(url) per request
+          {:auto, :no_url}       -> {:noreply, wait_for_network(state)}
           {:auto, {:error, _}}   -> {:noreply, alert_or_wait(state)}
         end
       end
@@ -125,6 +129,7 @@ defmodule VintageNetProxy do
           | :direct
           | {:manual, proxy_descriptor()}
           | {:auto, :ready}
+          | {:auto, :no_url}
           | {:auto, {:error, term()}}
 
   @type resolved :: :direct | proxy_descriptor()

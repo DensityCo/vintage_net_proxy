@@ -38,7 +38,7 @@ defmodule VintageNetProxy.Selector do
 
   @impl true
   def handle_info({:interface_changed, iface, state}, roster) do
-    old_state = Map.get(roster.states, iface)
+    old_state = Roster.get_iface(roster, iface)
     new_roster = Roster.put_iface(roster, iface, state)
     Publisher.put(Roster.value(new_roster))
     if pac_reloaded_in_place?(old_state, state), do: Publisher.bump_pac_revision()

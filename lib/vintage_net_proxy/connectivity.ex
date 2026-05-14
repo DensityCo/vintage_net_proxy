@@ -237,14 +237,14 @@ defmodule VintageNetProxy.Connectivity do
 
   # `{:auto, :ready}` means PAC is loaded; ask the Selector what the
   # proxy is for *this* URL. Everything else resolves the same
-  # regardless of URL — including `{:auto, {:error, _}}`, where we
-  # fall back to a direct probe so the connectivity status honestly
+  # regardless of URL — including `{:auto, _}` non-ready states, where
+  # we fall back to a direct probe so the connectivity status honestly
   # reports failure when the firewall blocks it.
   defp decide(:unset, _url), do: :direct
   defp decide(:direct, _url), do: :direct
   defp decide({:manual, descriptor}, _url), do: descriptor
   defp decide({:auto, :ready}, url), do: VintageNetProxy.resolve(url)
-  defp decide({:auto, {:error, _}}, _url), do: :direct
+  defp decide({:auto, _}, _url), do: :direct
 
   defp set_status(%{status: status} = state, status), do: state
 

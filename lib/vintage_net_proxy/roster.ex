@@ -37,6 +37,13 @@ defmodule VintageNetProxy.Roster do
   end
 
   @doc """
+  Return the cached snapshot for `iface`, or `nil` if none has been
+  stored yet.
+  """
+  @spec get_iface(t(), String.t()) :: Interface.t() | nil
+  def get_iface(state, iface), do: Map.get(state.states, iface)
+
+  @doc """
   Apply `fun` to the state of `iface`. No-op if `iface` isn't in this
   roster's priority list, or has no state yet.
   """

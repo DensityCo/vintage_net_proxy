@@ -198,6 +198,41 @@ defmodule VintageNetProxy.ConnectivityTest do
       # connectivity status honestly reflects what's reachable.
       assert Connectivity.check_now() == :ok
     end
+
+    test "{:auto, :no_url} → falls back to a direct probe" do
+      port = accepting_target()
+      PropertyTable.put(VintageNet, @config_property, {:auto, :no_url})
+      start_checker(probe_urls: ["http://127.0.0.1:#{port}/"], initial_delay: 60_000)
+
+      assert Connectivity.check_now() == :ok
+    end
+
+    test "{:auto, :ready} → calls VintageNetProxy.resolve and probes via the PAC's proxy" do
+      proxy_port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
+
+      # Bring up a full Selector + an Interface snapshot whose PAC
+      # routes everything through the fake proxy. The Connectivity
+      # decision for {:auto, :ready} flows through VintageNetProxy.resolve,
+      # which needs the Selector running to answer.
+      iface = "ifc#{:erlang.unique_integer([:positive])}"
+      start_supervised!({VintageNetProxy.Selector, interfaces: [iface]})
+
+      pac = ~s|function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:#{proxy_port}"; }|
+
+      snap = %VintageNetProxy.Interface{
+        iface: iface,
+        intent: %{mode: :auto},
+        connection: :internet,
+        pac_script: pac
+      }
+
+      send(VintageNetProxy.Selector, {:interface_changed, iface, snap})
+      _ = VintageNetProxy.status()
+
+      start_checker(probe_urls: ["https://target.test/"], initial_delay: 60_000)
+
+      assert Connectivity.check_now() == :ok
+    end
   end
 
   # --- Helpers ---
