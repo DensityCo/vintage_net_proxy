@@ -106,23 +106,48 @@ defmodule VintageNetProxy.InterfaceTest do
   end
 
   describe "resolve/2 — PAC fall-through diagnostics" do
-    @pac_direct ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
-    @pac_proxy ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
+    @pac_default_direct ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
+    @pac_default_proxy ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
+    @pac_rule_direct ~s|function FindProxyForURL(url, host) { if (host == "x.example") return "DIRECT"; return "PROXY p.corp:8080"; }|
+    @pac_fallthrough ""
 
-    test "logs at :info when PAC mode evaluates to :direct" do
-      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_direct)
+    test "{:default, :direct} logs at :info with iface + url" do
+      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_default_direct)
 
       log =
         capture_log([level: :info], fn ->
           assert Interface.resolve(state, "https://api.example.com/") == :direct
         end)
 
-      assert log =~ "PAC on wlan0 evaluated to DIRECT"
+      assert log =~ "PAC default on wlan0 evaluated to DIRECT"
       assert log =~ "https://api.example.com/"
     end
 
-    test "does not log when PAC mode evaluates to a proxy descriptor" do
-      state = iface(intent: %{mode: :auto}, pac_script: @pac_proxy)
+    test "{:rule, :direct} does NOT log (intentional bypass via a rule)" do
+      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_rule_direct)
+
+      log =
+        capture_log([level: :debug], fn ->
+          assert Interface.resolve(state, "http://x.example/") == :direct
+        end)
+
+      refute log =~ "PAC"
+    end
+
+    test "{:fallthrough, _} logs at :warning" do
+      state = iface(iface: "wlan0", intent: %{mode: :auto}, pac_script: @pac_fallthrough)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert Interface.resolve(state, "https://api.example.com/") == :direct
+        end)
+
+      assert log =~ "PAC on wlan0 matched no rules and had no default"
+      assert log =~ "https://api.example.com/"
+    end
+
+    test "does not log when PAC resolves to a proxy descriptor" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_default_proxy)
 
       log =
         capture_log([level: :info], fn ->
@@ -141,7 +166,7 @@ defmodule VintageNetProxy.InterfaceTest do
           assert Interface.resolve(state, "https://api.example.com/") == :direct
         end)
 
-      refute log =~ "PAC on"
+      refute log =~ "PAC"
     end
 
     test "does not log when :auto has no pac_script (degraded path)" do
@@ -152,7 +177,78 @@ defmodule VintageNetProxy.InterfaceTest do
           assert Interface.resolve(state, "https://api.example.com/") == :direct
         end)
 
-      refute log =~ "PAC on"
+      refute log =~ "PAC"
+    end
+  end
+
+  describe "resolve_strict/2" do
+    @pac_default_direct ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
+    @pac_default_proxy ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
+    @pac_rule_direct ~s|function FindProxyForURL(url, host) { if (host == "x.example") return "DIRECT"; return "PROXY p.corp:8080"; }|
+    @pac_rule_proxy ~s|function FindProxyForURL(url, host) { if (host == "x.example") return "PROXY q:1"; return "DIRECT"; }|
+
+    test "manual :direct mode → {:ok, :direct}" do
+      assert Interface.resolve_strict(iface(intent: %{mode: :direct}), "https://x/") ==
+               {:ok, :direct}
+    end
+
+    test "manual descriptor → {:ok, descriptor}" do
+      intent = %{mode: :manual, scheme: :http, host: "p", port: 80}
+
+      assert Interface.resolve_strict(iface(intent: intent), "https://x/") ==
+               {:ok, %{scheme: :http, host: "p", port: 80}}
+    end
+
+    test "PAC rule returning a proxy → {:ok, descriptor}" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_rule_proxy)
+
+      assert Interface.resolve_strict(state, "http://x.example/") ==
+               {:ok, %{scheme: :http, host: "q", port: 1}}
+    end
+
+    test "PAC rule returning DIRECT → {:ok, :direct} (intentional bypass)" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_rule_direct)
+
+      assert Interface.resolve_strict(state, "http://x.example/") == {:ok, :direct}
+    end
+
+    test "PAC default routing through a proxy → {:ok, descriptor}" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_default_proxy)
+
+      assert Interface.resolve_strict(state, "http://anything/") ==
+               {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
+    end
+
+    test "PAC default DIRECT → {:error, :pac_default_direct}" do
+      state = iface(intent: %{mode: :auto}, pac_script: @pac_default_direct)
+
+      assert Interface.resolve_strict(state, "http://anything/") ==
+               {:error, :pac_default_direct}
+    end
+
+    test "PAC fall-through (empty script) → {:error, :pac_fallthrough}" do
+      state = iface(intent: %{mode: :auto}, pac_script: "")
+
+      assert Interface.resolve_strict(state, "http://anything/") ==
+               {:error, :pac_fallthrough}
+    end
+
+    test ":auto with no PAC URL → {:error, :no_pac_url}" do
+      state = iface(intent: %{mode: :auto})
+
+      assert Interface.resolve_strict(state, "http://anything/") == {:error, :no_pac_url}
+    end
+
+    test ":auto with a PAC fetch error → {:error, {:pac_fetch_failed, reason}}" do
+      state = iface(intent: %{mode: :auto}, pac_fetch_error: :timeout)
+
+      assert Interface.resolve_strict(state, "http://anything/") ==
+               {:error, {:pac_fetch_failed, :timeout}}
+    end
+
+    test "no intent → {:error, :no_proxy_resolved}" do
+      assert Interface.resolve_strict(iface(intent: nil), "http://anything/") ==
+               {:error, :no_proxy_resolved}
     end
   end
 

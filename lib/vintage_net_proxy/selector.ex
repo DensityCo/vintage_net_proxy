@@ -20,6 +20,7 @@ defmodule VintageNetProxy.Selector do
 
   def status, do: GenServer.call(__MODULE__, :status)
   def resolve(url), do: GenServer.call(__MODULE__, {:resolve, url})
+  def resolve_strict(url), do: GenServer.call(__MODULE__, {:resolve_strict, url})
 
   @impl true
   def init(opts) do
@@ -35,6 +36,9 @@ defmodule VintageNetProxy.Selector do
 
   def handle_call({:resolve, url}, _from, roster),
     do: {:reply, Roster.resolve(roster, url), roster}
+
+  def handle_call({:resolve_strict, url}, _from, roster),
+    do: {:reply, Roster.resolve_strict(roster, url), roster}
 
   @impl true
   def handle_info({:interface_changed, iface, state}, roster) do

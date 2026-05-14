@@ -176,10 +176,57 @@ defmodule VintageNetProxy do
   Resolve the proxy for a specific URL.
 
   With a PAC script loaded, the script is evaluated for the given URL.
-  Manual configurations apply regardless of the URL.
+  Manual configurations apply regardless of the URL. Collapses every
+  "no proxy resolved" case (`:unset`, no PAC URL, PAC fetch failed,
+  PAC fell through) to `:direct` — the simplest reasonable default
+  for callers that just need a connect-this answer.
+
+  See `resolve_strict/1` for an error-tuple variant that refuses on
+  those cases instead of silently going direct.
   """
   @spec resolve(String.t()) :: resolved()
   def resolve(url) when is_binary(url), do: Selector.resolve(url)
+
+  @typedoc """
+  Strict resolve result. `:ok` means the resolution was decisive; the
+  caller should connect using the returned directive. `:error` means
+  the library couldn't confidently route this URL through a proxy and
+  the caller should refuse / wait / alert rather than silently bypass.
+
+  Reason atoms:
+
+    * `:pac_fallthrough` — PAC mode active, no rule matched, no
+      default extractable. Script is malformed or uses syntax we
+      can't evaluate.
+    * `:pac_default_direct` — PAC mode active, no rule matched, the
+      script's default is `DIRECT`. Possibly intentional for an open
+      network, but suspicious on a mandatory-proxy deployment.
+    * `:no_pac_url` — auto mode but no `:pac_url`, no DHCP wpad, no
+      DHCP domain.
+    * `{:pac_fetch_failed, reason}` — auto mode, the last fetch
+      attempt failed.
+    * `:no_proxy_resolved` — no eligible interface (no intent, or
+      none up).
+  """
+  @type strict_result :: {:ok, resolved()} | {:error, term()}
+
+  @doc """
+  Strict variant of `resolve/1`. Returns `{:ok, directive}` when a
+  decisive answer was reached and `{:error, reason}` when it wasn't —
+  i.e., the PAC fell through entirely, the PAC's default was itself
+  `DIRECT`, no PAC URL was discoverable, the fetch failed, or no
+  interface was eligible.
+
+  Use this when a proxy is mandatory in your deployment and silently
+  bypassing it is operationally wrong. Most consumers should stick
+  with `resolve/1`; this one is for the "refuse to attempt if the
+  proxy isn't confidently resolved" pattern.
+
+  Rules that explicitly return `DIRECT` (internal-host bypass) are
+  still `:ok` — the PAC author asked for that.
+  """
+  @spec resolve_strict(String.t()) :: strict_result()
+  def resolve_strict(url) when is_binary(url), do: Selector.resolve_strict(url)
 
   @doc """
   Property table key under which the connectivity check result is

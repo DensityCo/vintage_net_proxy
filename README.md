@@ -136,46 +136,53 @@ behavior — wait, alert, fall back to direct, etc.
 ### Diagnosing "why did my request go direct?"
 
 `resolve/1` returning `:direct` collapses three operationally
-distinct cases: PAC explicitly said `DIRECT` for this URL, PAC fell
-through (no rule matched, or the script used a predicate this
-evaluator doesn't support and silently skipped the rule), or the
-device simply has no proxy resolved. The last is normal; the middle
-one is a misconfiguration that's invisible from outside.
+distinct cases — and the library tags them internally so the
+diagnostic (and `resolve_strict/1`, below) can tell them apart:
 
-The library logs at `Logger.info` whenever PAC mode evaluates to
-`:direct`, so operators investigating "why is this request bypassing
-the proxy" see the signal without enabling debug:
+| Source | Meaning |
+|---|---|
+| `:rule` | A PAC rule's predicate matched and returned `DIRECT`. Intentional bypass (typical for internal hosts). |
+| `:default` | No rule matched and the script's default (last `return "..."`) is `DIRECT`. Possibly intentional, possibly a missing `PROXY` default. |
+| `:fallthrough` | No rule matched *and* no default could be extracted (malformed script, or every rule's predicate uses syntax this evaluator silently skips). |
 
-```
-[info]  VintageNetProxy: PAC on wlan0 evaluated to DIRECT for "https://api.example.com/"
-```
+The library logs differently per source so operators see the
+suspicious cases at a useful level without enabling debug:
 
-PAC scripts that intentionally return `DIRECT` for many internal
-hosts will produce a log line per such call; if that volume becomes
-a problem in your deployment, plumb a Logger filter on the
-`pac: :direct` metadata to drop or sample it.
+- **`:rule` → silent.** Working as designed.
+- **`:default, :direct` → `Logger.info`**: `"PAC default on wlan0 evaluated to DIRECT for ..."`. Often fine on open networks; surfaces missing-PROXY defaults on corporate ones.
+- **`:fallthrough` → `Logger.warning`**: `"PAC on wlan0 matched no rules and had no default; defaulting to DIRECT for ..."`. Always a sign of a broken script or unsupported syntax.
 
-Consumers that want a louder one-off warning the first time their
-own connect path falls through to direct on a PAC-managed network
-can detect it by pairing `resolve/1` with `get/0`:
+### `resolve_strict/1` for mandatory-proxy deployments
+
+If a proxy is mandatory in your deployment and silently bypassing it
+is operationally wrong, use `resolve_strict/1` instead of `resolve/1`.
+It returns `{:ok, directive}` for the cases where the library is
+confident, and `{:error, reason}` for the cases where it isn't —
+letting your code refuse / wait / alert instead of trying direct and
+failing the firewall:
 
 ```elixir
-case VintageNetProxy.resolve(url) do
-  :direct ->
-    if match?({:auto, :ready}, VintageNetProxy.get()) do
-      Logger.warning("PAC active but evaluated DIRECT for #{url}")
-    end
-    direct_connect(url)
-
-  %{} = descriptor ->
-    proxied_connect(url, descriptor)
+case VintageNetProxy.resolve_strict(url) do
+  {:ok, :direct}                       -> direct_connect(url)   # rule or manual :direct
+  {:ok, %{} = descriptor}              -> proxied_connect(url, descriptor)
+  {:error, :pac_default_direct}        -> alert_or_wait()       # PAC default is DIRECT
+  {:error, :pac_fallthrough}           -> alert_or_wait()       # script is malformed
+  {:error, :no_pac_url}                -> wait_for_dhcp()
+  {:error, {:pac_fetch_failed, _}}     -> wait_or_alert()
+  {:error, :no_proxy_resolved}         -> wait_for_interface()
 end
 ```
 
-Wrap that with your own dedup (ETS, a process flag, etc.) if you
-only want it once per startup or once per URL — the library can't
-know what counts as "first attempt" from your application's point
-of view.
+The split:
+
+- **`{:ok, ...}`** — manual config (`:direct` or descriptor), or PAC matched a rule (any directive), or PAC default routes through a proxy.
+- **`{:error, :pac_default_direct}`** — PAC mode active, no rule matched, default was `DIRECT`. Whether this is wrong depends on your deployment; in mandatory-proxy networks it usually is.
+- **`{:error, :pac_fallthrough}`** — PAC mode active, no rule and no default. Always a script bug.
+- **`{:error, :no_pac_url | {:pac_fetch_failed, _} | :no_proxy_resolved}`** — PAC mode active but we couldn't load a script, or no interface is currently eligible.
+
+Most consumers should stick with `resolve/1`. Reach for `resolve_strict/1`
+when "silently going direct" is the failure mode you're trying to
+avoid.
 
 ## Configuration
 

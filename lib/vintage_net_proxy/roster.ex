@@ -76,6 +76,19 @@ defmodule VintageNetProxy.Roster do
     end
   end
 
+  @doc """
+  Strict resolve: returns `{:ok, directive}` or `{:error, reason}`.
+  Errors with `:no_proxy_resolved` when no interface is active; otherwise
+  delegates to `Interface.resolve_strict/2`.
+  """
+  @spec resolve_strict(t(), String.t()) :: Interface.strict_result()
+  def resolve_strict(state, url) do
+    case active(state) do
+      nil -> {:error, :no_proxy_resolved}
+      iface_state -> Interface.resolve_strict(iface_state, url)
+    end
+  end
+
   @doc "Introspection map. `published` is whatever is currently in `[\"proxy\", \"config\"]`."
   @spec status(t(), term()) :: map()
   def status(state, published) do

@@ -192,6 +192,64 @@ defmodule VintageNetProxyTest do
     end
   end
 
+  describe "resolve_strict/1" do
+    test "{:error, :no_proxy_resolved} when no interface is eligible" do
+      assert VintageNetProxy.resolve_strict("https://x/") == {:error, :no_proxy_resolved}
+    end
+
+    test "manual :direct mode → {:ok, :direct}",
+         %{config_property: prop, iface: iface} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      flush(iface)
+
+      assert VintageNetProxy.resolve_strict("https://x/") == {:ok, :direct}
+    end
+
+    test "manual descriptor → {:ok, descriptor}",
+         %{config_property: prop, iface: iface} do
+      manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
+      flush(iface)
+
+      assert VintageNetProxy.resolve_strict("https://api.example.com/") ==
+               {:ok, %{scheme: :http, host: "p", port: 80}}
+    end
+
+    test "PAC with default DIRECT, no matching rule → {:error, :pac_default_direct}",
+         %{config_property: prop, iface: iface} do
+      port = serve_once(~s|function FindProxyForURL(url, host) { return "DIRECT"; }|)
+
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      flush(iface)
+
+      assert VintageNetProxy.resolve_strict("https://anything/") ==
+               {:error, :pac_default_direct}
+    end
+
+    test "PAC with a matching DIRECT rule → {:ok, :direct} (intentional bypass)",
+         %{config_property: prop, iface: iface} do
+      pac = ~s|function FindProxyForURL(url, host) { if (host == "internal") return "DIRECT"; return "PROXY p:8080"; }|
+
+      port = serve_once(pac)
+
+      PropertyTable.put(VintageNet, prop, %{
+        type: :fake,
+        proxy: %{mode: :auto, pac_url: "http://127.0.0.1:#{port}/wpad.dat"}
+      })
+
+      flush(iface)
+
+      assert VintageNetProxy.resolve_strict("http://internal/") == {:ok, :direct}
+
+      assert VintageNetProxy.resolve_strict("https://external/") ==
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
+    end
+  end
+
   describe "intent: :auto end-to-end (fetch + evaluate)" do
     test "explicit :pac_url is fetched, property goes {:auto, :ready}, resolve returns the descriptor",
          %{config_property: prop, iface: iface} do

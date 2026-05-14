@@ -57,10 +57,26 @@ proxy at `["proxy", "config"]`.
 * Re-probes on: startup, every `:interval` ms, `["proxy", "config"]`
   changes, `["proxy", "pac_revision"]` ticks.
 
+### PAC source distinction & strict resolve
+
+* `PAC.find_proxy/2` returns a `{source, directive}` tuple now —
+  `{:rule, _}` when a rule fired, `{:default, _}` when no rule matched
+  and the script had a default, `{:fallthrough, :direct}` when neither
+  applied. Lets the library tell "PAC intentionally said `DIRECT`"
+  apart from "PAC silently fell through to `DIRECT`."
+* The fall-through log uses the source tag to pick a level: `:rule`
+  is silent (working as designed), `{:default, :direct}` logs at
+  `:info`, `:fallthrough` logs at `:warning`.
+* `VintageNetProxy.resolve_strict/1` — error-tuple variant of
+  `resolve/1` for deployments where a proxy is mandatory. Returns
+  `{:error, :pac_default_direct | :pac_fallthrough | :no_pac_url |
+  {:pac_fetch_failed, _} | :no_proxy_resolved}` instead of silently
+  going direct.
+
 ### Public API
 
 * `VintageNetProxy` — `property/0`, `subscribe/0`, `unsubscribe/0`,
-  `get/0`, `status/0`, `resolve/1`.
+  `get/0`, `status/0`, `resolve/1`, `resolve_strict/1`.
 * Connectivity — `connectivity_property/0`,
   `subscribe_connectivity/0`, `unsubscribe_connectivity/0`,
   `connectivity/0`, `check_connectivity/0`.
