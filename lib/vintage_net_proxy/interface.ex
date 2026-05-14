@@ -14,7 +14,7 @@ defmodule VintageNetProxy.Interface do
 
   require Logger
 
-  alias VintageNetProxy.{Config, Fetcher, PAC, Wpad}
+  alias VintageNetProxy.{Addresses, Config, Fetcher, PAC, Wpad}
 
   @up_states [:internet, :lan]
 
@@ -316,43 +316,13 @@ defmodule VintageNetProxy.Interface do
 
   defp put_intent(state, _), do: %{state | intent: nil}
 
-  # Pulls both DHCP option 252 (`:wpad`) and option 15 (`:domain`) out of
-  # `dhcp_options`. Either is sufficient for `:auto` mode to find a PAC
-  # URL; option 252 wins via the priority order in `effective_pac_url/1`.
-  defp put_dhcp_options(state, opts) when is_map(opts) do
-    %{
-      state
-      | dhcp_wpad_url: extract_wpad(opts),
-        dhcp_domain: extract_domain(opts)
-    }
+  defp put_dhcp_options(state, opts) do
+    {wpad, domain} = Wpad.from_dhcp_options(opts)
+    %{state | dhcp_wpad_url: wpad, dhcp_domain: domain}
   end
 
-  defp put_dhcp_options(state, _),
-    do: %{state | dhcp_wpad_url: nil, dhcp_domain: nil}
-
-  defp extract_wpad(%{wpad: url}) when is_binary(url) and url != "", do: url
-  defp extract_wpad(_), do: nil
-
-  defp extract_domain(%{domain: d}) when is_binary(d) and d != "", do: d
-  defp extract_domain(_), do: nil
-
-  # Pick the first IPv4 address out of VintageNet's `addresses`
-  # property — used by PAC scripts that call `myIpAddress()` (typically
-  # inside `isInNet(myIpAddress(), …)` for subnet-aware routing). If
-  # no IPv4 address is present (interface down, IPv6-only lease, etc.)
-  # `local_ip` becomes nil, which makes `myIpAddress()` evaluate to
-  # "no IP" and the surrounding `isInNet` falls through.
-  defp put_addresses(state, addresses) when is_list(addresses),
-    do: %{state | local_ip: first_ipv4_string(addresses)}
-
-  defp put_addresses(state, _), do: %{state | local_ip: nil}
-
-  defp first_ipv4_string(addresses) do
-    Enum.find_value(addresses, fn
-      %{family: :inet, address: {a, b, c, d}} -> "#{a}.#{b}.#{c}.#{d}"
-      _ -> nil
-    end)
-  end
+  defp put_addresses(state, addresses),
+    do: %{state | local_ip: Addresses.first_ipv4(addresses)}
 
   defp configured_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
     do: url

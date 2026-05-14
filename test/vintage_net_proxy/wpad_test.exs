@@ -74,4 +74,38 @@ defmodule VintageNetProxy.WpadTest do
                "http://wpad.eng.corp.example.com/wpad.dat"
     end
   end
+
+  describe "from_dhcp_options/1" do
+    test "extracts both option 252 (wpad) and option 15 (domain)" do
+      assert Wpad.from_dhcp_options(%{wpad: "http://w/", domain: "corp.example.com"}) ==
+               {"http://w/", "corp.example.com"}
+    end
+
+    test "missing wpad → nil in that slot" do
+      assert Wpad.from_dhcp_options(%{domain: "corp.example.com"}) ==
+               {nil, "corp.example.com"}
+    end
+
+    test "missing domain → nil in that slot" do
+      assert Wpad.from_dhcp_options(%{wpad: "http://w/"}) == {"http://w/", nil}
+    end
+
+    test "empty strings are treated as missing" do
+      assert Wpad.from_dhcp_options(%{wpad: "", domain: ""}) == {nil, nil}
+    end
+
+    test "non-binary values are treated as missing" do
+      assert Wpad.from_dhcp_options(%{wpad: 123, domain: :corp}) == {nil, nil}
+    end
+
+    test "empty map → {nil, nil}" do
+      assert Wpad.from_dhcp_options(%{}) == {nil, nil}
+    end
+
+    test "non-map input → {nil, nil}" do
+      assert Wpad.from_dhcp_options(nil) == {nil, nil}
+      assert Wpad.from_dhcp_options([]) == {nil, nil}
+      assert Wpad.from_dhcp_options(:unknown) == {nil, nil}
+    end
+  end
 end

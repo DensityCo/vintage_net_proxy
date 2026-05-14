@@ -48,6 +48,29 @@ defmodule VintageNetProxy.Wpad do
 
   def dns_url(_), do: nil
 
+  @doc """
+  Extract the two PAC-relevant fields from VintageNet's `dhcp_options`
+  property: option 252 (`:wpad`, a complete URL) and option 15
+  (`:domain`, used to derive `http://wpad.<domain>/wpad.dat`).
+
+  Returns `{wpad_url, domain}` with `nil` in either slot when the
+  option is missing, empty, or the input isn't a map. The caller
+  decides which to prefer — option 252 wins in
+  `VintageNetProxy.Interface.effective_pac_url/1`.
+  """
+  @spec from_dhcp_options(term()) :: {String.t() | nil, String.t() | nil}
+  def from_dhcp_options(opts) when is_map(opts) do
+    {extract_wpad(opts), extract_domain(opts)}
+  end
+
+  def from_dhcp_options(_), do: {nil, nil}
+
+  defp extract_wpad(%{wpad: url}) when is_binary(url) and url != "", do: url
+  defp extract_wpad(_), do: nil
+
+  defp extract_domain(%{domain: d}) when is_binary(d) and d != "", do: d
+  defp extract_domain(_), do: nil
+
   # Loose check: alphanumerics, dots, hyphens; non-empty after trimming.
   # We don't enforce RFC 1035 hostname rules strictly — the network gets
   # to pick its own domain shape — but we do reject anything containing
