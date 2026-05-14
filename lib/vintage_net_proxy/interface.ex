@@ -158,32 +158,24 @@ defmodule VintageNetProxy.Interface do
   collapses the error to a direct connection.
   """
   @spec resolve(t(), String.t()) :: resolve_result()
-  def resolve(state, url) do
-    case state.intent do
-      %{mode: :direct} ->
-        {:ok, :direct}
+  def resolve(state, url)
 
-      %{mode: :manual} = m ->
-        {:ok, Config.to_descriptor(m)}
+  def resolve(%{intent: %{mode: :direct}}, _url), do: {:ok, :direct}
 
-      %{mode: :auto} when is_binary(state.pac_script) ->
-        state.pac_script
-        |> PAC.find_proxy(url)
-        |> handle_pac_result(state.iface, url)
+  def resolve(%{intent: %{mode: :manual} = m}, _url),
+    do: {:ok, Config.to_descriptor(m)}
 
-      %{mode: :auto} ->
-        cond do
-          not is_nil(state.pac_fetch_error) ->
-            {:error, {:pac_fetch_failed, state.pac_fetch_error}}
+  def resolve(%{intent: %{mode: :auto}, pac_script: script} = state, url)
+      when is_binary(script),
+      do: PAC.find_proxy(script, url) |> handle_pac_result(state.iface, url)
 
-          true ->
-            {:error, :no_pac_url}
-        end
+  def resolve(%{intent: %{mode: :auto}, pac_fetch_error: e}, _url)
+      when not is_nil(e),
+      do: {:error, {:pac_fetch_failed, e}}
 
-      _ ->
-        {:error, :no_proxy_resolved}
-    end
-  end
+  def resolve(%{intent: %{mode: :auto}}, _url), do: {:error, :no_pac_url}
+
+  def resolve(_state, _url), do: {:error, :no_proxy_resolved}
 
   # `PAC.find_proxy/2` returns `{source, directive}` so we can tell
   # *why* PAC produced its answer. Use the source tag to:
