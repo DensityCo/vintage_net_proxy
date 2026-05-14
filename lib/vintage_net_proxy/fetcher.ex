@@ -11,16 +11,29 @@ defmodule VintageNetProxy.Fetcher do
 
   ### TLS
 
-  Explicit `ssl` options are passed to `:httpc` on every request. This
-  is load-bearing on OTP 26+: `:httpc.http_options_default/0`
-  otherwise calls `:public_key.cacerts_get/0` for *any* request (HTTP
-  or HTTPS), and on systems without an OS CA store — Nerves images,
-  minimal containers — that raises `FunctionClauseError` from
-  `:pubkey_os_cacerts.conv_error_reason/1` with `:no_cacerts_found`.
+  Explicit `ssl: [verify: :verify_none]` is passed on every request.
+  Two reasons:
 
-  We use the CA bundle shipped by `:castore` so HTTPS PAC URLs verify
-  the same way everywhere (dev host, CI, Nerves). For `http://` URLs
-  the ssl options are inert at the wire level.
+    1. **OTP 26+ default-options crash.** `:httpc.http_options_default/0`
+       eagerly calls `:public_key.cacerts_get/0` for *any* request,
+       including HTTP. On systems with no OS CA store — Nerves images,
+       minimal containers — that raises `FunctionClauseError` from
+       `:pubkey_os_cacerts.conv_error_reason/1` with
+       `:no_cacerts_found`. Passing explicit ssl opts short-circuits
+       the default builder.
+
+    2. **PAC trust model.** WPAD-discovered PAC URLs (DHCP option 252,
+       DNS-WPAD) are HTTP by convention; the URL itself comes from
+       DHCP/DNS, so the network already has to be trusted for the
+       discovery step to be meaningful. Adding TLS verification on
+       top doesn't strengthen the trust model — an attacker who
+       controls DHCP can hand you their own server with a valid
+       cert. Explicit `intent.pac_url` HTTPS URLs typically point at
+       internal hostnames signed by private corporate CAs, which
+       wouldn't be in any public bundle (e.g. Mozilla's) anyway.
+
+  If you need cryptographic authenticity for your PAC script, fetch
+  it out-of-band and configure it as `manual` mode instead of `auto`.
   """
 
   require Logger
@@ -31,7 +44,7 @@ defmodule VintageNetProxy.Fetcher do
   @spec get(String.t()) :: {:ok, String.t()} | {:error, term()}
   def get(url) when is_binary(url) do
     request = {String.to_charlist(url), [user_agent_header()]}
-    http_opts = [timeout: @timeout, connect_timeout: @timeout, ssl: ssl_opts()]
+    http_opts = [timeout: @timeout, connect_timeout: @timeout, ssl: [verify: :verify_none]]
     opts = [body_format: :binary]
 
     case :httpc.request(:get, request, http_opts, opts) do
@@ -52,17 +65,6 @@ defmodule VintageNetProxy.Fetcher do
         log_failure(url, reason)
         {:error, reason}
     end
-  end
-
-  defp ssl_opts do
-    [
-      verify: :verify_peer,
-      cacertfile: CAStore.file_path(),
-      depth: 4,
-      customize_hostname_check: [
-        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-      ]
-    ]
   end
 
   defp log_failure(url, reason) do

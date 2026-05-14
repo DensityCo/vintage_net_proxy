@@ -45,17 +45,21 @@ proxy at `["proxy", "config"]`.
 
 ### Fetcher TLS
 
-* `VintageNetProxy.Fetcher` passes explicit `ssl` options to `:httpc`
-  on every request. On OTP 26+, `:httpc`'s default-options builder
-  eagerly calls `:public_key.cacerts_get/0` for *any* request — HTTP
-  or HTTPS — and on systems with no OS CA store (Nerves images,
-  minimal containers) that raises `FunctionClauseError` from
+* `VintageNetProxy.Fetcher` passes explicit
+  `ssl: [verify: :verify_none]` to `:httpc` on every request. On
+  OTP 26+, `:httpc`'s default-options builder eagerly calls
+  `:public_key.cacerts_get/0` for *any* request — HTTP or HTTPS —
+  and on systems with no OS CA store (Nerves images, minimal
+  containers) that raises `FunctionClauseError` from
   `pubkey_os_cacerts`. Passing explicit ssl opts short-circuits the
   default builder.
-* The CA bundle comes from `:castore` (new dependency), so HTTPS PAC
-  URLs verify the same way on dev hosts, CI, and Nerves devices.
-  `verify_peer` + hostname check always applies; for `http://` PAC
-  URLs the ssl opts are inert.
+* No TLS verification on PAC fetches. WPAD-discovered URLs (DHCP
+  option 252, DNS-WPAD) are HTTP by convention; the URL itself comes
+  from DHCP/DNS so the trust boundary is the LAN, not the TLS
+  handshake. Explicit HTTPS `pac_url` values typically point at
+  internal hostnames signed by private corporate CAs that aren't in
+  any public bundle. If you need cryptographic authenticity for
+  your PAC, fetch it out-of-band and configure `manual` mode.
 
 ### Connectivity checker
 
