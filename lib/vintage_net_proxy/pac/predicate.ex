@@ -5,9 +5,12 @@ defmodule VintageNetProxy.PAC.Predicate do
 
   Atoms supported:
 
-    * `shExpMatch(host, "glob")`
+    * `shExpMatch(host, "glob")` / `shExpMatch(url, "glob")`
     * `dnsDomainIs(host, ".suffix")`
     * `isPlainHostName(host)`
+    * `localHostOrDomainIs(host, "hostdom")` — matches `host` if it
+      equals `hostdom` *or* if `host` is the unqualified version
+      (`intranet` matches `intranet.corp.example`)
     * `isInNet(host, "network", "mask")` — IP-literal hosts only (no DNS)
     * `host == "literal"` / `host === "literal"`
 
@@ -20,12 +23,15 @@ defmodule VintageNetProxy.PAC.Predicate do
 
   alias VintageNetProxy.PAC.IP
 
-  @doc "Evaluate a predicate expression string against a host."
-  @spec eval(String.t(), String.t()) :: boolean()
-  def eval(expr, host) when is_binary(expr) and is_binary(host) do
+  @doc """
+  Evaluate a predicate expression string against a host (and
+  optionally the URL the host came from, for `shExpMatch(url, …)`).
+  """
+  @spec eval(String.t(), String.t(), String.t()) :: boolean()
+  def eval(expr, host, url \\ "") when is_binary(expr) and is_binary(host) and is_binary(url) do
     with {:ok, tokens} <- tokenize(expr, []),
          {:ok, ast, []} <- parse_or(tokens) do
-      evaluate(ast, host)
+      evaluate(ast, host, url)
     else
       _ -> false
     end
@@ -143,33 +149,56 @@ defmodule VintageNetProxy.PAC.Predicate do
 
   # ---- Evaluator ----
 
-  defp evaluate({:or, l, r}, host), do: evaluate(l, host) or evaluate(r, host)
-  defp evaluate({:and, l, r}, host), do: evaluate(l, host) and evaluate(r, host)
-  defp evaluate({:not, inner}, host), do: not evaluate(inner, host)
-  defp evaluate({:eq, literal}, host), do: String.downcase(host) == String.downcase(literal)
-  defp evaluate({:call, name, args}, host), do: call(name, args, host)
+  defp evaluate({:or, l, r}, host, url), do: evaluate(l, host, url) or evaluate(r, host, url)
+  defp evaluate({:and, l, r}, host, url), do: evaluate(l, host, url) and evaluate(r, host, url)
+  defp evaluate({:not, inner}, host, url), do: not evaluate(inner, host, url)
 
-  defp call("shExpMatch", [{:ident, "host"}, {:str, pattern}], host),
+  defp evaluate({:eq, literal}, host, _url),
+    do: String.downcase(host) == String.downcase(literal)
+
+  defp evaluate({:call, name, args}, host, url), do: call(name, args, host, url)
+
+  defp call("shExpMatch", [{:ident, "host"}, {:str, pattern}], host, _url),
     do: glob_match?(host, pattern)
 
-  defp call("dnsDomainIs", [{:ident, "host"}, {:str, suffix}], host),
+  defp call("shExpMatch", [{:ident, "url"}, {:str, pattern}], _host, url),
+    do: glob_match?(url, pattern)
+
+  defp call("dnsDomainIs", [{:ident, "host"}, {:str, suffix}], host, _url),
     do: String.ends_with?(String.downcase(host), String.downcase(suffix))
 
-  defp call("isPlainHostName", [{:ident, "host"}], host),
+  defp call("isPlainHostName", [{:ident, "host"}], host, _url),
     do: not String.contains?(host, ".")
 
-  defp call("isInNet", [{:ident, "host"}, {:str, net}, {:str, mask}], host),
+  defp call("localHostOrDomainIs", [{:ident, "host"}, {:str, hostdom}], host, _url),
+    do: local_host_or_domain_is?(host, hostdom)
+
+  defp call("isInNet", [{:ident, "host"}, {:str, net}, {:str, mask}], host, _url),
     do: IP.in_net?(host, net, mask)
 
-  defp call(_, _, _), do: false
+  defp call(_, _, _, _), do: false
 
-  defp glob_match?(host, pattern) do
+  defp glob_match?(string, pattern) do
     regex =
       pattern
       |> Regex.escape()
       |> String.replace("\\*", ".*")
       |> String.replace("\\?", ".")
 
-    Regex.match?(~r/^#{regex}$/i, host)
+    Regex.match?(~r/^#{regex}$/i, string)
+  end
+
+  # `localHostOrDomainIs(host, hostdom)` matches when:
+  #   * `host` equals `hostdom` exactly (e.g. host=`intranet.corp`,
+  #     hostdom=`intranet.corp`), or
+  #   * `host` has no dots *and* equals the first segment of `hostdom`
+  #     (e.g. host=`intranet`, hostdom=`intranet.corp` → true).
+  defp local_host_or_domain_is?(host, hostdom) do
+    host_lc = String.downcase(host)
+    hostdom_lc = String.downcase(hostdom)
+
+    host_lc == hostdom_lc or
+      (not String.contains?(host_lc, ".") and
+         hostdom_lc |> String.split(".", parts: 2) |> hd() == host_lc)
   end
 end

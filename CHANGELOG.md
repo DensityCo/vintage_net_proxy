@@ -57,6 +57,15 @@ proxy at `["proxy", "config"]`.
 * Re-probes on: startup, every `:interval` ms, `["proxy", "config"]`
   changes, `["proxy", "pac_revision"]` ticks.
 
+### PAC parser coverage
+
+* `HTTP host:port` is now recognized as an alias for `PROXY host:port`.
+* `shExpMatch` accepts `url` as the first argument as well as `host`,
+  so URL-pattern rules (e.g. `shExpMatch(url, "https://*")`) work.
+* New predicate `localHostOrDomainIs(host, "<hostdom>")` — matches
+  the fully-qualified `hostdom`, or `host` when it's the unqualified
+  form of `hostdom` (e.g. `intranet` matches `intranet.corp.example`).
+
 ### PAC return shape
 
 * `PAC.find_proxy/2` returns `{:ok, directive}` when the script

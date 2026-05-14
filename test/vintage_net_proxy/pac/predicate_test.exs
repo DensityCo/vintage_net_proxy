@@ -27,6 +27,83 @@ defmodule VintageNetProxy.PAC.PredicateTest do
     test "case-insensitive" do
       assert Predicate.eval(~s|shExpMatch(host, "*.CORP")|, "api.corp")
     end
+
+    test "url variant: matches against the full URL" do
+      assert Predicate.eval(
+               ~s|shExpMatch(url, "https://*")|,
+               "api.example",
+               "https://api.example/path"
+             )
+
+      refute Predicate.eval(
+               ~s|shExpMatch(url, "https://*")|,
+               "api.example",
+               "http://api.example/path"
+             )
+    end
+
+    test "url variant: glob over path" do
+      assert Predicate.eval(
+               ~s|shExpMatch(url, "*/admin/*")|,
+               "api.example",
+               "https://api.example/admin/users"
+             )
+
+      refute Predicate.eval(
+               ~s|shExpMatch(url, "*/admin/*")|,
+               "api.example",
+               "https://api.example/public"
+             )
+    end
+
+    test "url variant: when no url is provided, falls through to false" do
+      refute Predicate.eval(~s|shExpMatch(url, "https://*")|, "api.example")
+    end
+  end
+
+  describe "atom: localHostOrDomainIs" do
+    test "exact match on the fully-qualified host" do
+      assert Predicate.eval(
+               ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
+               "intranet.corp.example"
+             )
+    end
+
+    test "unqualified host matches the first segment of the hostdom" do
+      assert Predicate.eval(
+               ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
+               "intranet"
+             )
+    end
+
+    test "different unqualified host doesn't match" do
+      refute Predicate.eval(
+               ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
+               "wiki"
+             )
+    end
+
+    test "different fully-qualified host doesn't match" do
+      refute Predicate.eval(
+               ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
+               "home.corp.example"
+             )
+    end
+
+    test "qualified host that happens to share a leading segment doesn't match" do
+      # `intranet.other.example` is fully qualified and isn't `intranet.corp.example`
+      refute Predicate.eval(
+               ~s|localHostOrDomainIs(host, "intranet.corp.example")|,
+               "intranet.other.example"
+             )
+    end
+
+    test "case-insensitive" do
+      assert Predicate.eval(
+               ~s|localHostOrDomainIs(host, "Intranet.Corp.Example")|,
+               "INTRANET"
+             )
+    end
   end
 
   describe "atom: dnsDomainIs" do

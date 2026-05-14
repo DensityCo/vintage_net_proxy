@@ -571,8 +571,12 @@ WPAD scripts.
 
 **Predicate atoms:**
 - `shExpMatch(host, "<glob>")` — `*` and `?` wildcards
+- `shExpMatch(url, "<glob>")` — same matcher, against the full URL
 - `dnsDomainIs(host, ".<suffix>")` — case-insensitive suffix match
 - `isPlainHostName(host)`
+- `localHostOrDomainIs(host, "<hostdom>")` — matches the
+  fully-qualified `hostdom`, or `host` when it's the unqualified
+  form of `hostdom` (e.g. `intranet` matches `intranet.corp.example`)
 - `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
 - `host == "<literal>"` / `host === "<literal>"`
 
@@ -581,7 +585,7 @@ precedence (`!` > `&&` > `||`); left-associative.
 
 **Directives:**
 - `"DIRECT"` → `:direct`
-- `"PROXY host:port"` → `%{scheme: :http, ...}`
+- `"PROXY host:port"` / `"HTTP host:port"` → `%{scheme: :http, ...}`
 - `"HTTPS host:port"` → `%{scheme: :https, ...}`
 - `"SOCKS host:port"` / `"SOCKS4 host:port"` → `%{scheme: :socks4, ...}`
 - `"SOCKS5 host:port"` → `%{scheme: :socks5, ...}`

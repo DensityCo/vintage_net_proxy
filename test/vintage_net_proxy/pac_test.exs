@@ -60,6 +60,77 @@ defmodule VintageNetProxy.PACTest do
       assert PAC.find_proxy(script, "https://x/") ==
                {:ok, %{scheme: :socks5, host: "s", port: 1080}}
     end
+
+    test "HTTP host:port — alias for PROXY → :http descriptor" do
+      script = ~s|function FindProxyForURL(url, host) { return "HTTP proxy.example:8080"; }|
+
+      assert PAC.find_proxy(script, "https://example.com/") ==
+               {:ok, %{scheme: :http, host: "proxy.example", port: 8080}}
+    end
+  end
+
+  describe "find_proxy/2 — URL-based shExpMatch" do
+    test "matches an HTTPS-only rule based on URL prefix" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (shExpMatch(url, "https://*")) return "PROXY secure-proxy:443";
+        return "PROXY plain-proxy:80";
+      }
+      """
+
+      assert PAC.find_proxy(script, "https://api.example.com/") ==
+               {:ok, %{scheme: :http, host: "secure-proxy", port: 443}}
+
+      assert PAC.find_proxy(script, "http://api.example.com/") ==
+               {:ok, %{scheme: :http, host: "plain-proxy", port: 80}}
+    end
+
+    test "url and host variants can compose" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (shExpMatch(url, "*/internal/*") && dnsDomainIs(host, ".corp.example"))
+          return "DIRECT";
+        return "PROXY p:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "https://app.corp.example/internal/admin") ==
+               {:ok, :direct}
+
+      assert PAC.find_proxy(script, "https://app.corp.example/public") ==
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
+    end
+  end
+
+  describe "find_proxy/2 — localHostOrDomainIs" do
+    setup do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (localHostOrDomainIs(host, "intranet.corp.example")) return "DIRECT";
+        return "PROXY p:8080";
+      }
+      """
+
+      {:ok, script: script}
+    end
+
+    test "fully-qualified host matches", %{script: s} do
+      assert PAC.find_proxy(s, "https://intranet.corp.example/") == {:ok, :direct}
+    end
+
+    test "unqualified short name matches the first segment", %{script: s} do
+      assert PAC.find_proxy(s, "http://intranet/") == {:ok, :direct}
+    end
+
+    test "different fully-qualified host falls through", %{script: s} do
+      assert PAC.find_proxy(s, "https://home.corp.example/") ==
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
+    end
+
+    test "different unqualified host falls through", %{script: s} do
+      assert PAC.find_proxy(s, "http://wiki/") ==
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
+    end
   end
 
   describe "find_proxy/2 — shExpMatch" do

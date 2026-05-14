@@ -72,7 +72,7 @@ defmodule VintageNetProxy.PAC do
 
     matched =
       Enum.find_value(rules, fn {expr, directive} ->
-        if Predicate.eval(expr, host), do: directive
+        if Predicate.eval(expr, host, url), do: directive
       end)
 
     cond do
@@ -155,6 +155,8 @@ defmodule VintageNetProxy.PAC do
   defp scheme_atom(str) do
     case String.upcase(str) do
       "PROXY" -> :http
+      # `HTTP` is an alias for `PROXY` used by some PAC authors.
+      "HTTP" -> :http
       "HTTPS" -> :https
       "SOCKS" -> :socks4
       "SOCKS4" -> :socks4
