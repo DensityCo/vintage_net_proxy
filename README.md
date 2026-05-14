@@ -578,6 +578,12 @@ WPAD scripts.
   fully-qualified `hostdom`, or `host` when it's the unqualified
   form of `hostdom` (e.g. `intranet` matches `intranet.corp.example`)
 - `isInNet(host, "<net>", "<mask>")` — IPv4 literal hosts only (no DNS)
+- `isInNet(myIpAddress(), "<net>", "<mask>")` — checks the device's
+  own IPv4 address, taken from the active interface's `addresses`
+  property. Common pattern for subnet-aware routing: "if I'm on
+  10.1.x.x, use site-A proxy; on 10.2.x.x, use site-B." When no
+  IPv4 address is available (interface down, IPv6-only lease) the
+  predicate evaluates to false and the rule falls through.
 - `host == "<literal>"` / `host === "<literal>"`
 
 **Boolean composition:** `||`, `&&`, `!`, and parentheses. Standard

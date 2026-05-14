@@ -102,6 +102,51 @@ defmodule VintageNetProxy.PACTest do
     end
   end
 
+  describe "find_proxy/3 — myIpAddress (subnet-aware routing)" do
+    @multi_site """
+    function FindProxyForURL(url, host) {
+      if (isInNet(myIpAddress(), "10.1.0.0", "255.255.0.0")) return "PROXY site-a:8080";
+      if (isInNet(myIpAddress(), "10.2.0.0", "255.255.0.0")) return "PROXY site-b:8080";
+      return "PROXY default:8080";
+    }
+    """
+
+    test "device on site A's subnet routes through site-a proxy" do
+      assert PAC.find_proxy(@multi_site, "https://target.example/", local_ip: "10.1.5.10") ==
+               {:ok, %{scheme: :http, host: "site-a", port: 8080}}
+    end
+
+    test "device on site B's subnet routes through site-b proxy" do
+      assert PAC.find_proxy(@multi_site, "https://target.example/", local_ip: "10.2.5.10") ==
+               {:ok, %{scheme: :http, host: "site-b", port: 8080}}
+    end
+
+    test "device on neither subnet falls to the default proxy" do
+      assert PAC.find_proxy(@multi_site, "https://target.example/", local_ip: "192.168.1.5") ==
+               {:ok, %{scheme: :http, host: "default", port: 8080}}
+    end
+
+    test "no local_ip given → both myIpAddress rules fail; falls to default" do
+      assert PAC.find_proxy(@multi_site, "https://target.example/") ==
+               {:ok, %{scheme: :http, host: "default", port: 8080}}
+    end
+
+    test "RFC1918 bypass via myIpAddress (device-side check)" do
+      script = """
+      function FindProxyForURL(url, host) {
+        if (isInNet(myIpAddress(), "10.0.0.0", "255.0.0.0")) return "DIRECT";
+        return "PROXY p:8080";
+      }
+      """
+
+      assert PAC.find_proxy(script, "https://api.example.com/", local_ip: "10.1.2.3") ==
+               {:ok, :direct}
+
+      assert PAC.find_proxy(script, "https://api.example.com/", local_ip: "192.168.1.5") ==
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
+    end
+  end
+
   describe "find_proxy/2 — localHostOrDomainIs" do
     setup do
       script = """

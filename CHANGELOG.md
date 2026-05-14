@@ -65,6 +65,15 @@ proxy at `["proxy", "config"]`.
 * New predicate `localHostOrDomainIs(host, "<hostdom>")` — matches
   the fully-qualified `hostdom`, or `host` when it's the unqualified
   form of `hostdom` (e.g. `intranet` matches `intranet.corp.example`).
+* `isInNet(myIpAddress(), "<net>", "<mask>")` — checks the device's
+  own IPv4 address. The Interface subscribes to VintageNet's
+  per-interface `addresses` property and surfaces the first IPv4
+  address as `local_ip`, threaded through to PAC evaluation. Common
+  pattern for subnet-aware proxy routing (site-A vs site-B). When
+  no IPv4 address is available the rule falls through.
+* `VintageNetProxy.PAC.Predicate.eval/2` takes a single keyword opts
+  (`host:`, `url:`, `local_ip:`) instead of positional args, so
+  future runtime context slots in without growing the signature.
 
 ### PAC return shape
 

@@ -95,7 +95,8 @@ defmodule VintageNetProxy.Roster do
                dhcp_domain: nil,
                pac_url: nil,
                pac_loaded?: false,
-               pac_fetch_error: nil
+               pac_fetch_error: nil,
+               local_ip: nil
              }}
 
           s ->
@@ -109,7 +110,8 @@ defmodule VintageNetProxy.Roster do
                dhcp_domain: snap.dhcp_domain,
                pac_url: snap.pac_url,
                pac_loaded?: snap.pac_loaded?,
-               pac_fetch_error: snap.pac_fetch_error
+               pac_fetch_error: snap.pac_fetch_error,
+               local_ip: snap.local_ip
              }}
         end
       end)

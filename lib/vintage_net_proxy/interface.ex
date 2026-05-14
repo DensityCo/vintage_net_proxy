@@ -24,7 +24,8 @@ defmodule VintageNetProxy.Interface do
             dhcp_domain: nil,
             pac_script: nil,
             pac_fetch_error: nil,
-            connection: nil
+            connection: nil,
+            local_ip: nil
 
   @type t :: %__MODULE__{
           iface: String.t() | nil,
@@ -33,7 +34,8 @@ defmodule VintageNetProxy.Interface do
           dhcp_domain: String.t() | nil,
           pac_script: String.t() | nil,
           pac_fetch_error: term() | nil,
-          connection: atom() | nil
+          connection: atom() | nil,
+          local_ip: String.t() | nil
         }
 
   # --- Client API ---
@@ -160,9 +162,9 @@ defmodule VintageNetProxy.Interface do
   def resolve(%{intent: %{mode: :manual} = m}, _url),
     do: {:ok, Config.to_descriptor(m)}
 
-  def resolve(%{intent: %{mode: :auto}, pac_script: script}, url)
+  def resolve(%{intent: %{mode: :auto}, pac_script: script, local_ip: local_ip}, url)
       when is_binary(script),
-      do: PAC.find_proxy(script, url)
+      do: PAC.find_proxy(script, url, local_ip: local_ip)
 
   def resolve(%{intent: %{mode: :auto}, pac_fetch_error: e}, _url)
       when not is_nil(e),
@@ -184,7 +186,8 @@ defmodule VintageNetProxy.Interface do
       pac_fetch_error: state.pac_fetch_error,
       dhcp_wpad_url: state.dhcp_wpad_url,
       dhcp_domain: state.dhcp_domain,
-      pac_url: configured_pac_url(state)
+      pac_url: configured_pac_url(state),
+      local_ip: state.local_ip
     }
   end
 
@@ -195,7 +198,7 @@ defmodule VintageNetProxy.Interface do
     iface = Keyword.fetch!(opts, :iface)
     parent = Keyword.fetch!(opts, :parent)
 
-    Enum.each(["config", "dhcp_options", "connection"], fn prop ->
+    Enum.each(["config", "dhcp_options", "connection", "addresses"], fn prop ->
       VintageNet.subscribe(["interface", iface, prop])
     end)
 
@@ -208,6 +211,7 @@ defmodule VintageNetProxy.Interface do
       |> put_connection(VintageNet.get(["interface", iface, "connection"]))
       |> put_intent(VintageNet.get(["interface", iface, "config"]))
       |> put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
+      |> put_addresses(VintageNet.get(["interface", iface, "addresses"]))
 
     {:ok, {state, parent}, {:continue, :startup}}
   end
@@ -231,6 +235,9 @@ defmodule VintageNetProxy.Interface do
 
   def handle_info({VintageNet, ["interface", _, "connection"], _o, new, _m}, ps),
     do: handle_event(ps, &put_connection(&1, new))
+
+  def handle_info({VintageNet, ["interface", _, "addresses"], _o, new, _m}, ps),
+    do: handle_event(ps, &put_addresses(&1, new))
 
   def handle_info(_msg, ps), do: {:noreply, ps}
 
@@ -325,6 +332,24 @@ defmodule VintageNetProxy.Interface do
 
   defp extract_domain(%{domain: d}) when is_binary(d) and d != "", do: d
   defp extract_domain(_), do: nil
+
+  # Pick the first IPv4 address out of VintageNet's `addresses`
+  # property — used by PAC scripts that call `myIpAddress()` (typically
+  # inside `isInNet(myIpAddress(), …)` for subnet-aware routing). If
+  # no IPv4 address is present (interface down, IPv6-only lease, etc.)
+  # `local_ip` becomes nil, which makes `myIpAddress()` evaluate to
+  # "no IP" and the surrounding `isInNet` falls through.
+  defp put_addresses(state, addresses) when is_list(addresses),
+    do: %{state | local_ip: first_ipv4_string(addresses)}
+
+  defp put_addresses(state, _), do: %{state | local_ip: nil}
+
+  defp first_ipv4_string(addresses) do
+    Enum.find_value(addresses, fn
+      %{family: :inet, address: {a, b, c, d}} -> "#{a}.#{b}.#{c}.#{d}"
+      _ -> nil
+    end)
+  end
 
   defp configured_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
     do: url
