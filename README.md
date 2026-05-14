@@ -81,24 +81,43 @@ are present only for authenticated proxies (typically set via the
 
 ## Consumer pattern
 
-For most consumers, the simplest integration is to call
-`VintageNetProxy.resolve/1` at connect time. It returns `:direct` or a
-descriptor, never any of the tagged states — the library collapses
-"no proxy resolved yet" / "PAC fetch failed" / "no proxy intent" into
-`:direct` (treat-as-no-proxy is the right default; gating connections
-on a stricter signal would mean a device on a network with no proxy
-advertisement never connects).
+Per-URL: call `VintageNetProxy.resolve/1` at connect time. It returns
+`{:ok, directive}` when the library is confident the request should
+go that way, or `{:error, reason}` when it isn't. Callers decide
+what to do on each error — refuse, wait, alert, or explicitly fall
+back to a direct connection.
 
 ```elixir
 defp connect(url) do
   case VintageNetProxy.resolve(url) do
-    :direct          -> direct_connect(url)
-    %{} = descriptor -> proxied_connect(url, descriptor)
+    {:ok, :direct}                  -> direct_connect(url)
+    {:ok, %{} = descriptor}         -> proxied_connect(url, descriptor)
+    {:error, :pac_default_direct}   -> alert_or_wait()       # PAC default is DIRECT
+    {:error, :pac_fallthrough}      -> alert_or_wait()       # script is malformed
+    {:error, :no_pac_url}           -> wait_for_dhcp()
+    {:error, {:pac_fetch_failed, _}} -> wait_or_alert()
+    {:error, :no_proxy_resolved}    -> wait_for_interface()
   end
 end
 ```
 
-If you subscribe to the published property — e.g. so independent
+Consumers that don't need to distinguish error reasons collapse:
+
+```elixir
+case VintageNetProxy.resolve(url) do
+  {:ok, decision} -> connect(url, decision)
+  {:error, _}     -> connect(url, :direct)
+end
+```
+
+That collapse is explicit. The library deliberately *doesn't* hide
+the error inside `resolve/1` and silently return `:direct` —
+"silently bypassing a mandatory proxy" is the exact failure mode the
+strict shape is meant to prevent. If your deployment is happy with
+direct on resolution failure, you write that collapse; if it isn't,
+you handle the reasons individually.
+
+When subscribing to the published property — e.g. so independent
 outbound clients (MQTT, WebSocket) can drop and reconnect when the
 proxy changes — match on the tagged shape:
 
@@ -116,9 +135,7 @@ def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
 end
 ```
 
-Consumers that don't care about the breakdown can use a binary gate —
-`:unset` means "wait, nothing useful yet," anything else is "we have
-something actionable, attempt the connection":
+Consumers that just want the simple "is the proxy ready" gate:
 
 ```elixir
 case proxy do
@@ -127,62 +144,24 @@ case proxy do
 end
 ```
 
-The `{:auto, :ready}` shape means "PAC is loaded; call `resolve/1`
-per URL." It's distinct from `:unset` (no eligible interface or no
-intent yet) and from `{:auto, {:error, reason}}` (we tried to load
-the PAC and it failed), so consumers can give each case its own
-behavior — wait, alert, fall back to direct, etc.
+### Why `:direct` shows up under three different sources
 
-### Diagnosing "why did my request go direct?"
+Behind the scenes, a PAC script can hand back `DIRECT` via three
+distinct paths and the library labels each so the right diagnostic
+gets emitted:
 
-`resolve/1` returning `:direct` collapses three operationally
-distinct cases — and the library tags them internally so the
-diagnostic (and `resolve_strict/1`, below) can tell them apart:
-
-| Source | Meaning |
-|---|---|
-| `:rule` | A PAC rule's predicate matched and returned `DIRECT`. Intentional bypass (typical for internal hosts). |
-| `:default` | No rule matched and the script's default (last `return "..."`) is `DIRECT`. Possibly intentional, possibly a missing `PROXY` default. |
-| `:fallthrough` | No rule matched *and* no default could be extracted (malformed script, or every rule's predicate uses syntax this evaluator silently skips). |
+| Source | Resolve return | Meaning |
+|---|---|---|
+| `:rule` | `{:ok, :direct}` | A rule's predicate matched and returned `DIRECT`. Intentional bypass (internal hosts). |
+| `:default` | `{:error, :pac_default_direct}` | No rule matched; the script's default is `DIRECT`. Possibly intentional, possibly a missing `PROXY` default. |
+| `:fallthrough` | `{:error, :pac_fallthrough}` | No rule matched *and* no default could be extracted. Malformed script, or every predicate uses syntax this evaluator silently skips. |
 
 The library logs differently per source so operators see the
-suspicious cases at a useful level without enabling debug:
+suspicious cases without enabling debug:
 
-- **`:rule` → silent.** Working as designed.
-- **`:default, :direct` → `Logger.info`**: `"PAC default on wlan0 evaluated to DIRECT for ..."`. Often fine on open networks; surfaces missing-PROXY defaults on corporate ones.
-- **`:fallthrough` → `Logger.warning`**: `"PAC on wlan0 matched no rules and had no default; defaulting to DIRECT for ..."`. Always a sign of a broken script or unsupported syntax.
-
-### `resolve_strict/1` for mandatory-proxy deployments
-
-If a proxy is mandatory in your deployment and silently bypassing it
-is operationally wrong, use `resolve_strict/1` instead of `resolve/1`.
-It returns `{:ok, directive}` for the cases where the library is
-confident, and `{:error, reason}` for the cases where it isn't —
-letting your code refuse / wait / alert instead of trying direct and
-failing the firewall:
-
-```elixir
-case VintageNetProxy.resolve_strict(url) do
-  {:ok, :direct}                       -> direct_connect(url)   # rule or manual :direct
-  {:ok, %{} = descriptor}              -> proxied_connect(url, descriptor)
-  {:error, :pac_default_direct}        -> alert_or_wait()       # PAC default is DIRECT
-  {:error, :pac_fallthrough}           -> alert_or_wait()       # script is malformed
-  {:error, :no_pac_url}                -> wait_for_dhcp()
-  {:error, {:pac_fetch_failed, _}}     -> wait_or_alert()
-  {:error, :no_proxy_resolved}         -> wait_for_interface()
-end
-```
-
-The split:
-
-- **`{:ok, ...}`** — manual config (`:direct` or descriptor), or PAC matched a rule (any directive), or PAC default routes through a proxy.
-- **`{:error, :pac_default_direct}`** — PAC mode active, no rule matched, default was `DIRECT`. Whether this is wrong depends on your deployment; in mandatory-proxy networks it usually is.
-- **`{:error, :pac_fallthrough}`** — PAC mode active, no rule and no default. Always a script bug.
-- **`{:error, :no_pac_url | {:pac_fetch_failed, _} | :no_proxy_resolved}`** — PAC mode active but we couldn't load a script, or no interface is currently eligible.
-
-Most consumers should stick with `resolve/1`. Reach for `resolve_strict/1`
-when "silently going direct" is the failure mode you're trying to
-avoid.
+- `:rule` → silent. Working as designed.
+- `{:default, :direct}` → `Logger.info` (`"PAC default on wlan0 evaluated to DIRECT for ..."`).
+- `:fallthrough` → `Logger.warning` (`"PAC on wlan0 matched no rules and had no default; defaulting to DIRECT for ..."`).
 
 ## Configuration
 

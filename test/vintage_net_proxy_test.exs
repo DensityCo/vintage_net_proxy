@@ -166,52 +166,29 @@ defmodule VintageNetProxyTest do
   end
 
   describe "resolve/1" do
-    test ":direct when no interface is eligible" do
-      assert VintageNetProxy.resolve("https://example.com/") == :direct
+    test "{:error, :no_proxy_resolved} when no interface is eligible" do
+      assert VintageNetProxy.resolve("https://example.com/") ==
+               {:error, :no_proxy_resolved}
     end
 
-    test "respects manual intent regardless of URL",
+    test "manual :direct → {:ok, :direct}",
+         %{config_property: prop, iface: iface} do
+      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
+      flush(iface)
+
+      assert VintageNetProxy.resolve("https://x/") == {:ok, :direct}
+    end
+
+    test "manual descriptor returned regardless of URL",
          %{config_property: prop, iface: iface} do
       manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
       PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
       flush(iface)
 
       assert VintageNetProxy.resolve("https://api.example.com/") ==
-               %{scheme: :http, host: "p", port: 80}
+               {:ok, %{scheme: :http, host: "p", port: 80}}
 
       assert VintageNetProxy.resolve("http://intranet/") ==
-               %{scheme: :http, host: "p", port: 80}
-    end
-
-    test "returns :direct for :direct intent",
-         %{config_property: prop, iface: iface} do
-      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      flush(iface)
-
-      assert VintageNetProxy.resolve("https://x/") == :direct
-    end
-  end
-
-  describe "resolve_strict/1" do
-    test "{:error, :no_proxy_resolved} when no interface is eligible" do
-      assert VintageNetProxy.resolve_strict("https://x/") == {:error, :no_proxy_resolved}
-    end
-
-    test "manual :direct mode → {:ok, :direct}",
-         %{config_property: prop, iface: iface} do
-      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
-      flush(iface)
-
-      assert VintageNetProxy.resolve_strict("https://x/") == {:ok, :direct}
-    end
-
-    test "manual descriptor → {:ok, descriptor}",
-         %{config_property: prop, iface: iface} do
-      manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
-      PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: manual})
-      flush(iface)
-
-      assert VintageNetProxy.resolve_strict("https://api.example.com/") ==
                {:ok, %{scheme: :http, host: "p", port: 80}}
     end
 
@@ -226,7 +203,7 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNetProxy.resolve_strict("https://anything/") ==
+      assert VintageNetProxy.resolve("https://anything/") ==
                {:error, :pac_default_direct}
     end
 
@@ -243,9 +220,9 @@ defmodule VintageNetProxyTest do
 
       flush(iface)
 
-      assert VintageNetProxy.resolve_strict("http://internal/") == {:ok, :direct}
+      assert VintageNetProxy.resolve("http://internal/") == {:ok, :direct}
 
-      assert VintageNetProxy.resolve_strict("https://external/") ==
+      assert VintageNetProxy.resolve("https://external/") ==
                {:ok, %{scheme: :http, host: "p", port: 8080}}
     end
   end
@@ -266,7 +243,7 @@ defmodule VintageNetProxyTest do
       assert VintageNetProxy.status().by_interface[iface].pac_loaded? == true
 
       assert VintageNetProxy.resolve("https://api.example.com/") ==
-               %{scheme: :http, host: "p.corp", port: 8080}
+               {:ok, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
     test "DHCP-discovered WPAD URL is fetched when intent has no explicit pac_url",
@@ -288,7 +265,7 @@ defmodule VintageNetProxyTest do
       assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://api.corp/") ==
-               %{scheme: :http, host: "corp", port: 8080}
+               {:ok, %{scheme: :http, host: "corp", port: 8080}}
     end
 
     test "explicit :pac_url takes precedence over DHCP wpad",
@@ -314,7 +291,7 @@ defmodule VintageNetProxyTest do
       assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
       assert VintageNetProxy.resolve("https://anything/") ==
-               %{scheme: :http, host: "explicit", port: 1}
+               {:ok, %{scheme: :http, host: "explicit", port: 1}}
     end
 
     test "end-to-end with a representative enterprise WPAD",
@@ -340,13 +317,15 @@ defmodule VintageNetProxyTest do
 
       assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
-      assert VintageNetProxy.resolve("https://api.corp.example.com/") == :direct
-      assert VintageNetProxy.resolve("http://intranet/") == :direct
+      # Internal hosts match a rule → {:ok, :direct} (intentional bypass).
+      assert VintageNetProxy.resolve("https://api.corp.example.com/") == {:ok, :direct}
+      assert VintageNetProxy.resolve("http://intranet/") == {:ok, :direct}
 
+      # External traffic falls to the default fallback list → first proxy.
       assert VintageNetProxy.resolve("https://www.google.com/") ==
-               %{scheme: :http, host: "primary-proxy", port: 8080}
+               {:ok, %{scheme: :http, host: "primary-proxy", port: 8080}}
 
-      assert VintageNetProxy.resolve("https://my-bucket.s3.amazonaws.com/") == :direct
+      assert VintageNetProxy.resolve("https://my-bucket.s3.amazonaws.com/") == {:ok, :direct}
     end
 
     test "connection going down clears the cached PAC",

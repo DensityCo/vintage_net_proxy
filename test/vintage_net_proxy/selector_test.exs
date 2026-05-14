@@ -125,43 +125,16 @@ defmodule VintageNetProxy.SelectorTest do
   end
 
   describe "resolve/1" do
-    test ":direct when no interface is eligible" do
-      assert Selector.resolve("https://x/") == :direct
-    end
-
-    test ":manual returns the descriptor regardless of URL", %{primary: iface} do
-      manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
-      send_snapshot(iface, intent: manual, connection: :internet)
-      assert Selector.resolve("https://anything/") == %{scheme: :http, host: "p", port: 80}
-    end
-
-    test ":auto evaluates the PAC against the supplied URL", %{primary: iface} do
-      script = ~s|function FindProxyForURL(url, host) { return "PROXY p.corp:8080"; }|
-      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
-
-      assert Selector.resolve("https://x/") ==
-               %{scheme: :http, host: "p.corp", port: 8080}
-    end
-  end
-
-  describe "resolve_strict/1" do
     test "{:error, :no_proxy_resolved} when no interface is eligible" do
-      assert Selector.resolve_strict("https://x/") == {:error, :no_proxy_resolved}
+      assert Selector.resolve("https://x/") == {:error, :no_proxy_resolved}
     end
 
     test ":manual → {:ok, descriptor}", %{primary: iface} do
       manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
       send_snapshot(iface, intent: manual, connection: :internet)
 
-      assert Selector.resolve_strict("https://anything/") ==
+      assert Selector.resolve("https://anything/") ==
                {:ok, %{scheme: :http, host: "p", port: 80}}
-    end
-
-    test "PAC default DIRECT → {:error, :pac_default_direct}", %{primary: iface} do
-      script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
-      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
-
-      assert Selector.resolve_strict("https://x/") == {:error, :pac_default_direct}
     end
 
     test "PAC rule returning a proxy → {:ok, descriptor}", %{primary: iface} do
@@ -170,8 +143,15 @@ defmodule VintageNetProxy.SelectorTest do
 
       send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
 
-      assert Selector.resolve_strict("http://x/") ==
+      assert Selector.resolve("http://x/") ==
                {:ok, %{scheme: :http, host: "q", port: 1}}
+    end
+
+    test "PAC default DIRECT → {:error, :pac_default_direct}", %{primary: iface} do
+      script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
+
+      assert Selector.resolve("https://x/") == {:error, :pac_default_direct}
     end
   end
 

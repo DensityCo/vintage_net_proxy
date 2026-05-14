@@ -46,12 +46,10 @@ defmodule VintageNetProxy.PAC do
       callers working, but this is usually a sign of a malformed
       script or one that uses syntax this evaluator silently skips.
 
-  `VintageNetProxy.resolve/1` collapses the source tag and returns the
-  bare directive (the public contract is unchanged); strict callers can
-  reach for `VintageNetProxy.resolve_strict/1`, which uses the source
-  tag to refuse on `:fallthrough` and on `{:default, :direct}` — the
-  cases that look the same as "no proxy" downstream and silently
-  bypass a mandatory proxy.
+  `VintageNetProxy.resolve/1` uses the source tag to return
+  `{:ok, directive}` for `:rule` matches and `{:default, descriptor}`,
+  and `{:error, :pac_default_direct | :pac_fallthrough}` for the
+  cases that silently bypass a mandatory proxy.
   """
 
   alias VintageNetProxy.PAC.Predicate

@@ -67,25 +67,16 @@ defmodule VintageNetProxy.Roster do
     end
   end
 
-  @doc "Resolve `url` against the active interface's PAC; `:direct` if no interface is active."
-  @spec resolve(t(), String.t()) :: term()
+  @doc """
+  Resolve `url` against the active interface. Returns the active
+  interface's `Interface.resolve/2` result, or
+  `{:error, :no_proxy_resolved}` if no interface is currently active.
+  """
+  @spec resolve(t(), String.t()) :: Interface.resolve_result()
   def resolve(state, url) do
     case active(state) do
-      nil -> :direct
-      iface_state -> Interface.resolve(iface_state, url)
-    end
-  end
-
-  @doc """
-  Strict resolve: returns `{:ok, directive}` or `{:error, reason}`.
-  Errors with `:no_proxy_resolved` when no interface is active; otherwise
-  delegates to `Interface.resolve_strict/2`.
-  """
-  @spec resolve_strict(t(), String.t()) :: Interface.strict_result()
-  def resolve_strict(state, url) do
-    case active(state) do
       nil -> {:error, :no_proxy_resolved}
-      iface_state -> Interface.resolve_strict(iface_state, url)
+      iface_state -> Interface.resolve(iface_state, url)
     end
   end
 
