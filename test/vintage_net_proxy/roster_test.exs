@@ -155,6 +155,51 @@ defmodule VintageNetProxy.RosterTest do
     end
   end
 
+  describe "resolve_strict/2" do
+    test "no active interface → {:error, :no_proxy_resolved}" do
+      assert Roster.resolve_strict(Roster.new([], %{}), "https://x/") ==
+               {:error, :no_proxy_resolved}
+    end
+
+    test "active :direct → {:ok, :direct}" do
+      s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
+      assert Roster.resolve_strict(s, "https://x/") == {:ok, :direct}
+    end
+
+    test "active :manual → {:ok, descriptor}" do
+      intent = %{mode: :manual, scheme: :http, host: "p", port: 8080}
+      s = state([iface(iface: "eth0", intent: intent, connection: :internet)])
+
+      assert Roster.resolve_strict(s, "https://x/") ==
+               {:ok, %{scheme: :http, host: "p", port: 8080}}
+    end
+
+    test "active :auto with PAC default DIRECT → {:error, :pac_default_direct}" do
+      script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
+
+      s =
+        state([
+          iface(
+            iface: "eth0",
+            intent: %{mode: :auto},
+            connection: :internet,
+            pac_script: script
+          )
+        ])
+
+      assert Roster.resolve_strict(s, "https://x/") == {:error, :pac_default_direct}
+    end
+
+    test "active :auto with PAC fall-through → {:error, :pac_fallthrough}" do
+      s =
+        state([
+          iface(iface: "eth0", intent: %{mode: :auto}, connection: :internet, pac_script: "")
+        ])
+
+      assert Roster.resolve_strict(s, "https://x/") == {:error, :pac_fallthrough}
+    end
+  end
+
   describe "status/2" do
     test "active_iface is nil when no interface is eligible" do
       s = state([iface(iface: "eth0", intent: nil, connection: :internet)])

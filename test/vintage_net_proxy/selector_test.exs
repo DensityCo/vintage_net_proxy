@@ -144,6 +144,37 @@ defmodule VintageNetProxy.SelectorTest do
     end
   end
 
+  describe "resolve_strict/1" do
+    test "{:error, :no_proxy_resolved} when no interface is eligible" do
+      assert Selector.resolve_strict("https://x/") == {:error, :no_proxy_resolved}
+    end
+
+    test ":manual → {:ok, descriptor}", %{primary: iface} do
+      manual = %{mode: :manual, scheme: :http, host: "p", port: 80}
+      send_snapshot(iface, intent: manual, connection: :internet)
+
+      assert Selector.resolve_strict("https://anything/") ==
+               {:ok, %{scheme: :http, host: "p", port: 80}}
+    end
+
+    test "PAC default DIRECT → {:error, :pac_default_direct}", %{primary: iface} do
+      script = ~s|function FindProxyForURL(url, host) { return "DIRECT"; }|
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
+
+      assert Selector.resolve_strict("https://x/") == {:error, :pac_default_direct}
+    end
+
+    test "PAC rule returning a proxy → {:ok, descriptor}", %{primary: iface} do
+      script =
+        ~s|function FindProxyForURL(url, host) { if (host == "x") return "PROXY q:1"; return "DIRECT"; }|
+
+      send_snapshot(iface, intent: %{mode: :auto}, connection: :internet, pac_script: script)
+
+      assert Selector.resolve_strict("http://x/") ==
+               {:ok, %{scheme: :http, host: "q", port: 1}}
+    end
+  end
+
   describe "status/0" do
     test "reflects active interface and per-interface state",
          %{primary: p, secondary: s} do

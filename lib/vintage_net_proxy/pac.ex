@@ -28,8 +28,30 @@ defmodule VintageNetProxy.PAC do
       responsibility.
 
   Anything outside this subset (parse error, unsupported atom, malformed
-  predicate) evaluates to false and the rule falls through. Malformed
-  scripts return `:direct`.
+  predicate) evaluates to false and the rule falls through.
+
+  ## Result shape
+
+  `find_proxy/2` returns `{source, directive}` so callers can tell *how*
+  the script reached its answer:
+
+    * `{:rule, directive}` — a rule's predicate matched; the directive
+      is whatever that rule returned. The author intentionally routed
+      this URL through (or around) the proxy.
+    * `{:default, directive}` — no rule matched; the directive is the
+      script's default (the last unguarded `return "..."`). The
+      author wrote a default, even if that default is `DIRECT`.
+    * `{:fallthrough, :direct}` — no rule matched *and* the script
+      has no extractable default. We synthesize `:direct` to keep
+      callers working, but this is usually a sign of a malformed
+      script or one that uses syntax this evaluator silently skips.
+
+  `VintageNetProxy.resolve/1` collapses the source tag and returns the
+  bare directive (the public contract is unchanged); strict callers can
+  reach for `VintageNetProxy.resolve_strict/1`, which uses the source
+  tag to refuse on `:fallthrough` and on `{:default, :direct}` — the
+  cases that look the same as "no proxy" downstream and silently
+  bypass a mandatory proxy.
   """
 
   alias VintageNetProxy.PAC.Predicate
@@ -42,10 +64,15 @@ defmodule VintageNetProxy.PAC do
 
   @type directive :: :direct | proxy_descriptor()
 
+  @typedoc """
+  Where a `find_proxy/2` answer came from. See the module docs.
+  """
+  @type source :: :rule | :default | :fallthrough
+
   @if_re ~r/if\s*\(\s*(.+?)\s*\)\s*\{?\s*return\s*["']([^"']+)["']/us
   @return_re ~r/return\s*["']([^"']+)["']/u
 
-  @spec find_proxy(String.t(), String.t()) :: directive()
+  @spec find_proxy(String.t(), String.t()) :: {source(), directive()}
   def find_proxy(script, url) when is_binary(script) and is_binary(url) do
     script = strip_comments(script)
     host = host_from_url(url)
@@ -56,8 +83,11 @@ defmodule VintageNetProxy.PAC do
         if Predicate.eval(expr, host), do: directive
       end)
 
-    (matched || extract_default(script) || "DIRECT")
-    |> parse_directive()
+    cond do
+      matched -> {:rule, parse_directive(matched)}
+      default = extract_default(script) -> {:default, parse_directive(default)}
+      true -> {:fallthrough, :direct}
+    end
   end
 
   # JS-style comments break the rule-extraction regex when they sit between
