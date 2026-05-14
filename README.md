@@ -518,7 +518,14 @@ debugging or external inspection.
   * `VintageNetProxy.Fetcher` — synchronous `Fetcher.get(url)` using
     `:httpc`. Has a 5-second timeout and a 256 KiB body cap. Logs a
     warning on every failure path so callers don't have to thread
-    error reasons through state.
+    error reasons through state. Passes explicit `ssl` options to
+    `:httpc` on every request (HTTP and HTTPS) — without this, OTP
+    26+'s eager `:public_key.cacerts_get/0` crashes on systems with
+    no OS CA store, e.g. Nerves images. HTTPS PAC URLs require a CA
+    bundle: configure
+    `config :vintage_net_proxy, :fetcher, cacertfile: CAStore.file_path()`
+    (or `cacerts: ...`) — otherwise `get/1` returns
+    `{:error, :no_cacerts}`.
 
   * `VintageNetProxy.Wpad` — DNS-WPAD URL construction (option 15 →
     `http://wpad.<domain>/wpad.dat`) and DHCP-option extraction
