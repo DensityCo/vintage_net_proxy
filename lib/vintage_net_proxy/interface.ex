@@ -150,25 +150,28 @@ defmodule VintageNetProxy.Interface do
     {:noreply, maybe_schedule_retry(%{state | proxy: proxy, retry_attempt: 0})}
   end
 
+  # `Proxy.fetch_target/1` is the functional-core predicate for "is a
+  # fetch still owed?" — `:none` covers both success (script cached)
+  # and no-URL (intent isn't auto, link is down, no WPAD source). The
+  # shell only has to translate that into "schedule a retry timer or
+  # don't."
   defp maybe_schedule_retry(%State{proxy: proxy} = state) do
-    cond do
-      is_binary(proxy.pac_script) ->
-        state
-
-      is_nil(Proxy.effective_pac_url(proxy)) ->
-        state
-
-      true ->
-        delay = retry_delay(state)
-        ref = Process.send_after(self(), :retry_fetch, delay)
-
-        Logger.debug(fn ->
-          "VintageNetProxy.Interface(#{proxy.iface}): PAC fetch did not populate cache; " <>
-            "retrying in #{delay}ms (attempt #{state.retry_attempt + 1})"
-        end)
-
-        %{state | retry_ref: ref}
+    case Proxy.fetch_target(proxy) do
+      :none -> state
+      {:ok, _url} -> schedule_retry(state)
     end
+  end
+
+  defp schedule_retry(%State{proxy: proxy} = state) do
+    delay = retry_delay(state)
+    ref = Process.send_after(self(), :retry_fetch, delay)
+
+    Logger.debug(fn ->
+      "VintageNetProxy.Interface(#{proxy.iface}): PAC fetch did not populate cache; " <>
+        "retrying in #{delay}ms (attempt #{state.retry_attempt + 1})"
+    end)
+
+    %{state | retry_ref: ref}
   end
 
   defp cancel_retry(%State{retry_ref: nil} = state), do: state
