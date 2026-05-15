@@ -17,6 +17,8 @@ defmodule VintageNetProxy.Interface.RetryTest do
   @pac_url "http://wpad.test.local/wpad.dat"
   @pac_script "function FindProxyForURL(url, host) { return \"DIRECT\"; }"
 
+  setup :set_mimic_global
+
   setup do
     iface = "test#{:erlang.unique_integer([:positive])}"
 
