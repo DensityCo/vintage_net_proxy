@@ -41,13 +41,12 @@ defmodule VintageNetProxy.Supervisor do
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, []) || []
-    iface_opts = Keyword.take(opts, [:fetcher, :retry_backoff_ms])
 
     children = [
       {Registry, keys: :unique, name: VintageNetProxy.InterfaceRegistry},
       PAC.DNS,
       {Selector, interfaces: interfaces},
-      {InterfaceSupervisor, [interfaces: interfaces] ++ iface_opts}
+      {InterfaceSupervisor, interfaces: interfaces}
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

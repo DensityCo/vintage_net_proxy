@@ -69,12 +69,15 @@ proxy at `["proxy", "config"]`.
   a DNS race where `dhcp_options` delivers the WPAD URL milliseconds
   before `wpad.<domain>` is resolvable — would leave the interface
   at `pac_script: nil` until the next external event happened to
-  nudge `refresh_cache/2`. Any inbound VintageNet event
-  (`config`, `dhcp_options`, `connection`, `addresses`) cancels the
-  pending retry and resets the attempt counter; a successful fetch
-  cancels the chain. The backoff schedule and fetcher are injectable
-  via `VintageNetProxy.Supervisor` opts (`retry_backoff_ms:` and
-  `fetcher:`) for testing.
+  nudge `refresh_cache/2`. Each scheduled retry carries a fresh ref
+  token; any inbound VintageNet event clears the token (invalidating
+  pending retries) and re-evaluates whether a fresh fetch is owed
+  against the post-event state. Success ends the chain.
+* The backoff schedule is overridable via
+  `config :vintage_net_proxy, :retry_backoff_ms, [...]` — mainly the
+  test suite uses it to shrink delays. The fetcher itself is stubbed
+  with `Mimic` in the retry test, so production callers see no extra
+  surface area for testability.
 
 ### Connectivity checker
 
