@@ -3,10 +3,10 @@ defmodule VintageNetProxy.Interface.RetryTest do
   Covers the retry-on-failed-PAC-fetch behavior in
   `VintageNetProxy.Interface`.
 
-  Setup mirrors the integration tests in `VintageNetProxyTest`, plus
-  a tiny `:retry_backoff_ms` override (so retries fire in tens of ms
-  instead of seconds) and a `Mimic` stub on `VintageNetProxy.Fetcher`
-  to drive synthetic transient-failure scenarios.
+  Starts `Interface` directly with `self()` as the parent so
+  `:interface_changed` lands in the test mailbox — no Selector, no
+  polling helper. `Fetcher.get/1` is stubbed via `Mimic` to drive
+  synthetic transient-failure sequences.
   """
   use ExUnit.Case, async: false
   use Mimic
@@ -15,140 +15,101 @@ defmodule VintageNetProxy.Interface.RetryTest do
 
   @short_backoff [10, 20, 40]
   @pac_url "http://wpad.test.local/wpad.dat"
+  @other_url "http://wpad.other.local/wpad.dat"
   @pac_script "function FindProxyForURL(url, host) { return \"DIRECT\"; }"
+  @auto_config %{type: :fake, proxy: %{mode: :auto, pac_url: @pac_url}}
 
   setup :set_mimic_global
 
   setup do
     iface = "test#{:erlang.unique_integer([:positive])}"
+    config_prop = ["interface", iface, "config"]
+    connection_prop = ["interface", iface, "connection"]
 
-    properties = %{
-      config: ["interface", iface, "config"],
-      dhcp: ["interface", iface, "dhcp_options"],
-      connection: ["interface", iface, "connection"]
-    }
-
-    PropertyTable.put(VintageNet, properties.connection, :internet)
+    PropertyTable.put(VintageNet, connection_prop, :internet)
 
     previous_backoff = Application.get_env(:vintage_net_proxy, :retry_backoff_ms)
     Application.put_env(:vintage_net_proxy, :retry_backoff_ms, @short_backoff)
 
+    start_supervised!({Registry, keys: :unique, name: VintageNetProxy.InterfaceRegistry})
+    start_supervised!({Interface, iface: iface, parent: self()})
+
+    # Drain the initial push so each test asserts on event-driven changes.
+    assert_receive {:interface_changed, ^iface, _}, 500
+
     on_exit(fn ->
-      for {_k, prop} <- properties, do: PropertyTable.delete(VintageNet, prop)
-      PropertyTable.delete(VintageNet, ["proxy", "config"])
+      for prop <- [config_prop, connection_prop],
+          do: PropertyTable.delete(VintageNet, prop)
 
       if previous_backoff,
         do: Application.put_env(:vintage_net_proxy, :retry_backoff_ms, previous_backoff),
         else: Application.delete_env(:vintage_net_proxy, :retry_backoff_ms)
     end)
 
-    {:ok, iface: iface, properties: properties}
+    {:ok, iface: iface, config_prop: config_prop}
   end
 
-  defp start_tree!(iface) do
-    start_supervised!({VintageNetProxy.Supervisor, interfaces: [iface]})
-  end
-
-  # Drives `Fetcher.get/1` from a queue of scripted responses; the queue
-  # cycles, so once exhausted the final response repeats indefinitely.
-  # Returns a 0-arity function that reports how many fetches have been
-  # observed so far.
-  defp stub_fetcher(plan) do
-    {:ok, agent} = start_supervised({Agent, fn -> {0, plan} end})
+  # Returns a stubbing function that pops responses from `plan` and
+  # mirrors each invocation back to the test via `{:fetch, n}` so we
+  # can both count and order observations from the mailbox.
+  defp scripted_fetcher(plan) do
+    parent = self()
+    {:ok, agent} = start_supervised({Agent, fn -> 0 end})
 
     stub(Fetcher, :get, fn _url ->
-      Agent.get_and_update(agent, fn {n, [step | rest]} ->
-        {step, {n + 1, rest ++ [step]}}
-      end)
+      n = Agent.get_and_update(agent, fn n -> {n, n + 1} end)
+      send(parent, {:fetch, n})
+      Enum.at(plan, min(n, length(plan) - 1))
     end)
-
-    fn -> Agent.get(agent, fn {n, _} -> n end) end
-  end
-
-  defp wait_until(fun, timeout_ms \\ 1_000, interval_ms \\ 10) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-
-    loop = fn loop ->
-      case fun.() do
-        {:ok, value} ->
-          value
-
-        :error ->
-          if System.monotonic_time(:millisecond) >= deadline do
-            flunk("wait_until timed out after #{timeout_ms}ms")
-          else
-            Process.sleep(interval_ms)
-            loop.(loop)
-          end
-      end
-    end
-
-    loop.(loop)
   end
 
   test "retries until PAC fetch succeeds, then stops",
-       %{iface: iface, properties: properties} do
-    calls = stub_fetcher([{:error, :nxdomain}, {:error, :nxdomain}, {:ok, @pac_script}])
-    start_tree!(iface)
+       %{iface: iface, config_prop: prop} do
+    scripted_fetcher([{:error, :nxdomain}, {:error, :nxdomain}, {:ok, @pac_script}])
 
-    PropertyTable.put(VintageNet, properties.config, %{
-      type: :fake,
-      proxy: %{mode: :auto, pac_url: @pac_url}
-    })
+    PropertyTable.put(VintageNet, prop, @auto_config)
 
-    wait_until(fn ->
-      proxy = Interface.get(iface)
-      if is_binary(proxy.pac_script), do: {:ok, proxy}, else: :error
-    end)
+    assert_receive {:fetch, 0}, 500
+    assert_receive {:fetch, 1}, 500
+    assert_receive {:fetch, 2}, 500
 
-    # Third call succeeded; the chain should stop. Sleep past the
-    # largest backoff and confirm the counter is steady.
-    Process.sleep(80)
-    final_count = calls.()
-    assert final_count >= 3
-    Process.sleep(80)
-    assert calls.() == final_count
+    assert_receive {:interface_changed, ^iface, %{pac_script: @pac_script}}, 500
+
+    # Chain should stop on success — comfortably past the largest
+    # backoff bucket in the test schedule (40ms).
+    refute_receive {:fetch, _}, 100
   end
 
-  test "a VintageNet event cancels the pending retry and re-fetches immediately",
-       %{iface: iface, properties: properties} do
+  test "a VintageNet event invalidates a pending retry and re-fetches with the new URL",
+       %{iface: iface, config_prop: prop} do
+    # Long initial backoff: the retry timer won't fire on its own
+    # within the test window. The only way the second fetch happens is
+    # via the config-change event clearing the token and re-fetching.
     Application.put_env(:vintage_net_proxy, :retry_backoff_ms, [5_000, 5_000])
-    calls = stub_fetcher([{:error, :nxdomain}, {:ok, @pac_script}])
-    start_tree!(iface)
+    scripted_fetcher([{:error, :nxdomain}, {:ok, @pac_script}])
 
-    PropertyTable.put(VintageNet, properties.config, %{
+    PropertyTable.put(VintageNet, prop, @auto_config)
+    assert_receive {:fetch, 0}, 500
+
+    PropertyTable.put(VintageNet, prop, %{
       type: :fake,
-      proxy: %{mode: :auto, pac_url: @pac_url}
+      proxy: %{mode: :auto, pac_url: @other_url}
     })
 
-    wait_until(fn -> if calls.() >= 1, do: {:ok, :ok}, else: :error end)
-
-    # Push a different URL through the config event — this should
-    # invalidate the long retry timer and run a fresh fetch right away.
-    PropertyTable.put(VintageNet, properties.config, %{
-      type: :fake,
-      proxy: %{mode: :auto, pac_url: "http://wpad.other.local/wpad.dat"}
-    })
-
-    wait_until(fn ->
-      proxy = Interface.get(iface)
-      if is_binary(proxy.pac_script), do: {:ok, proxy}, else: :error
-    end)
-
-    # Two fetcher calls: the failure, then the success triggered by the
-    # config event. If the long timer had fired, we'd see >2.
-    assert calls.() == 2
+    assert_receive {:fetch, 1}, 500
+    assert_receive {:interface_changed, ^iface, %{pac_script: @pac_script}}, 500
+    refute_receive {:fetch, _}, 100
   end
 
   test "no retry scheduled when there is no PAC URL to fetch",
-       %{iface: iface, properties: properties} do
-    calls = stub_fetcher([{:error, :nxdomain}])
-    start_tree!(iface)
+       %{iface: iface, config_prop: prop} do
+    # Reject any Fetcher.get call — :direct mode means
+    # Proxy.fetch_target/1 returns :none, so no fetch should fire.
+    reject(&Fetcher.get/1)
 
-    PropertyTable.put(VintageNet, properties.config, %{type: :fake, proxy: %{mode: :direct}})
+    PropertyTable.put(VintageNet, prop, %{type: :fake, proxy: %{mode: :direct}})
 
-    _ = Interface.get(iface)
-    Process.sleep(120)
-    assert calls.() == 0
+    assert_receive {:interface_changed, ^iface, %{intent: %{mode: :direct}}}, 500
+    refute_receive {:interface_changed, ^iface, _}, 100
   end
 end

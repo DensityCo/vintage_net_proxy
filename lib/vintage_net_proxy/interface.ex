@@ -16,23 +16,16 @@ defmodule VintageNetProxy.Interface do
 
   ### PAC fetch retry
 
-  PAC fetches can fail transiently — most commonly a DNS race where
-  `dhcp_options` delivers the WPAD URL milliseconds before
-  `wpad.<domain>` becomes resolvable. `Proxy.refresh_cache/2` doesn't
-  store the error, so without help the interface would sit at
-  `pac_script: nil` until the next VintageNet event happened to nudge
-  it. We avoid that: whenever `Proxy.fetch_target/1` reports a fetch
-  is still owed after `refresh_cache/2`, the interface schedules a
-  `{:retry_fetch, token}` message on a backoff schedule. Each
-  scheduled retry carries a fresh token; the handler only acts when
-  the token matches the state's current one, so a VintageNet event
-  invalidates pending retries by simply clearing the token. Success
-  ends the chain.
-
-  The backoff schedule defaults to `[1s, 2s, 4s, 8s, 16s, 32s, 60s]`
-  (caps at 60s thereafter) and is overridable via
-  `config :vintage_net_proxy, :retry_backoff_ms, [...]` — mainly used
-  by the test suite to shrink delays.
+  Transient PAC fetch failures (typically a DNS race where
+  `dhcp_options` delivers the WPAD URL before `wpad.<domain>` is
+  resolvable) would otherwise leave the interface at `pac_script:
+  nil` until the next external nudge. Whenever `Proxy.fetch_target/1`
+  says a fetch is still owed, the interface schedules
+  `{:retry_fetch, token}` on a backoff schedule. Each retry carries
+  a fresh ref token, so any VintageNet event invalidates pending
+  retries by clearing the state's token — stale messages fall
+  through a no-match clause. Override the schedule via
+  `config :vintage_net_proxy, :retry_backoff_ms, [...]`.
 
   See the Architecture section of the README for the full picture.
   """
