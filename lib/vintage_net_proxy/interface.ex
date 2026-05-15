@@ -21,12 +21,13 @@ defmodule VintageNetProxy.Interface do
   `wpad.<domain>` becomes resolvable. `Proxy.refresh_cache/2` doesn't
   store the error, so without help the interface would sit at
   `pac_script: nil` until the next VintageNet event happened to nudge
-  it. We avoid that: whenever `refresh_cache/2` leaves `pac_script`
-  unset *and* `effective_pac_url/1` is non-nil, the interface
-  schedules `:retry_fetch` with exponential backoff. Any inbound
-  VintageNet event cancels the pending retry and resets the attempt
-  counter — a real state change should re-fetch immediately. Success
-  cancels the chain.
+  it. We avoid that: whenever `Proxy.fetch_target/1` reports a fetch
+  is still owed after `refresh_cache/2`, the interface schedules a
+  `{:retry_fetch, token}` message with exponential backoff. Each
+  scheduled retry carries a fresh token; the handler only acts when
+  the token matches the state's current one, so a VintageNet event
+  invalidates pending retries by simply clearing the token. Success
+  ends the chain.
 
   See the Architecture section of the README for the full picture.
   """
@@ -40,7 +41,7 @@ defmodule VintageNetProxy.Interface do
 
   defmodule State do
     @moduledoc false
-    defstruct [:proxy, :parent, :fetcher, :backoff_ms, :retry_ref, retry_attempt: 0]
+    defstruct [:proxy, :parent, :fetcher, :backoff_ms, :retry_token, retry_attempt: 0]
   end
 
   # --- Client API ---
@@ -126,35 +127,42 @@ defmodule VintageNetProxy.Interface do
   def handle_info({VintageNet, ["interface", _, "addresses"], _o, new, _m}, state),
     do: handle_event(state, &Proxy.put_addresses(&1, new))
 
-  def handle_info(:retry_fetch, %State{proxy: proxy, fetcher: fetcher} = state) do
+  def handle_info(
+        {:retry_fetch, token},
+        %State{retry_token: token, proxy: proxy, fetcher: fetcher} = state
+      ) do
     proxy = Proxy.refresh_cache(proxy, fetcher)
     push(state.parent, proxy)
 
-    state = %{state | proxy: proxy, retry_ref: nil, retry_attempt: state.retry_attempt + 1}
+    state = %{state | proxy: proxy, retry_token: nil, retry_attempt: state.retry_attempt + 1}
     {:noreply, maybe_schedule_retry(state)}
   end
+
+  # Stale retry from a timer that fired after a VintageNet event cleared
+  # the token. Ignore — the event already drove a fresh refresh_cache.
+  def handle_info({:retry_fetch, _stale}, state), do: {:noreply, state}
 
   def handle_info(_msg, state), do: {:noreply, state}
 
   # --- Internals ---
 
+  # Any VintageNet event nils the retry token (invalidating any pending
+  # timer) and resets the attempt counter, then re-evaluates whether a
+  # fresh retry is owed against the post-event state.
   defp handle_event(%State{fetcher: fetcher} = state, change_fn) do
-    state = cancel_retry(state)
-
     proxy =
       state.proxy
       |> Proxy.transition(change_fn)
       |> Proxy.refresh_cache(fetcher)
 
     push(state.parent, proxy)
-    {:noreply, maybe_schedule_retry(%{state | proxy: proxy, retry_attempt: 0})}
+    {:noreply, maybe_schedule_retry(%{state | proxy: proxy, retry_token: nil, retry_attempt: 0})}
   end
 
   # `Proxy.fetch_target/1` is the functional-core predicate for "is a
   # fetch still owed?" — `:none` covers both success (script cached)
   # and no-URL (intent isn't auto, link is down, no WPAD source). The
-  # shell only has to translate that into "schedule a retry timer or
-  # don't."
+  # shell only has to translate that into "schedule a retry or don't."
   defp maybe_schedule_retry(%State{proxy: proxy} = state) do
     case Proxy.fetch_target(proxy) do
       :none -> state
@@ -164,30 +172,15 @@ defmodule VintageNetProxy.Interface do
 
   defp schedule_retry(%State{proxy: proxy} = state) do
     delay = retry_delay(state)
-    ref = Process.send_after(self(), :retry_fetch, delay)
+    token = make_ref()
+    Process.send_after(self(), {:retry_fetch, token}, delay)
 
     Logger.debug(fn ->
       "VintageNetProxy.Interface(#{proxy.iface}): PAC fetch did not populate cache; " <>
         "retrying in #{delay}ms (attempt #{state.retry_attempt + 1})"
     end)
 
-    %{state | retry_ref: ref}
-  end
-
-  defp cancel_retry(%State{retry_ref: nil} = state), do: state
-
-  defp cancel_retry(%State{retry_ref: ref} = state) do
-    Process.cancel_timer(ref)
-    flush_retry()
-    %{state | retry_ref: nil}
-  end
-
-  defp flush_retry do
-    receive do
-      :retry_fetch -> :ok
-    after
-      0 -> :ok
-    end
+    %{state | retry_token: token}
   end
 
   defp retry_delay(%State{backoff_ms: schedule, retry_attempt: attempt}) do
