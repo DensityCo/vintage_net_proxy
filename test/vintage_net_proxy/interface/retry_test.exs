@@ -3,13 +3,19 @@ defmodule VintageNetProxy.Interface.RetryTest do
   Covers the retry-on-failed-PAC-fetch behavior in
   `VintageNetProxy.Interface`.
 
-  Setup is identical to the integration tests in `VintageNetProxyTest`,
-  but starts the supervisor with a synthetic fetcher and tiny backoff
-  schedule so we can drive transient-failure scenarios deterministically.
+  Setup mirrors the integration tests in `VintageNetProxyTest`, plus
+  a tiny `:retry_backoff_ms` override (so retries fire in tens of ms
+  instead of seconds) and a `Mimic` stub on `VintageNetProxy.Fetcher`
+  to drive synthetic transient-failure scenarios.
   """
   use ExUnit.Case, async: false
+  use Mimic
 
-  alias VintageNetProxy.Interface
+  alias VintageNetProxy.{Fetcher, Interface}
+
+  @short_backoff [10, 20, 40]
+  @pac_url "http://wpad.test.local/wpad.dat"
+  @pac_script "function FindProxyForURL(url, host) { return \"DIRECT\"; }"
 
   setup do
     iface = "test#{:erlang.unique_integer([:positive])}"
@@ -22,29 +28,39 @@ defmodule VintageNetProxy.Interface.RetryTest do
 
     PropertyTable.put(VintageNet, properties.connection, :internet)
 
+    previous_backoff = Application.get_env(:vintage_net_proxy, :retry_backoff_ms)
+    Application.put_env(:vintage_net_proxy, :retry_backoff_ms, @short_backoff)
+
     on_exit(fn ->
       for {_k, prop} <- properties, do: PropertyTable.delete(VintageNet, prop)
       PropertyTable.delete(VintageNet, ["proxy", "config"])
+
+      if previous_backoff,
+        do: Application.put_env(:vintage_net_proxy, :retry_backoff_ms, previous_backoff),
+        else: Application.delete_env(:vintage_net_proxy, :retry_backoff_ms)
     end)
 
     {:ok, iface: iface, properties: properties}
   end
 
-  defp start_with_fetcher!(iface, fetcher, backoff_ms) do
-    start_supervised!(
-      {VintageNetProxy.Supervisor,
-       interfaces: [iface], fetcher: fetcher, retry_backoff_ms: backoff_ms}
-    )
+  defp start_tree!(iface) do
+    start_supervised!({VintageNetProxy.Supervisor, interfaces: [iface]})
   end
 
-  defp counting_fetcher(plan) do
-    {:ok, agent} = Agent.start_link(fn -> {0, plan} end)
+  # Drives `Fetcher.get/1` from a queue of scripted responses; the queue
+  # cycles, so once exhausted the final response repeats indefinitely.
+  # Returns a 0-arity function that reports how many fetches have been
+  # observed so far.
+  defp stub_fetcher(plan) do
+    {:ok, agent} = start_supervised({Agent, fn -> {0, plan} end})
 
-    fetcher = fn _url ->
-      Agent.get_and_update(agent, fn {n, [step | rest]} -> {step, {n + 1, rest ++ [step]}} end)
-    end
+    stub(Fetcher, :get, fn _url ->
+      Agent.get_and_update(agent, fn {n, [step | rest]} ->
+        {step, {n + 1, rest ++ [step]}}
+      end)
+    end)
 
-    {fetcher, fn -> Agent.get(agent, fn {n, _} -> n end) end}
+    fn -> Agent.get(agent, fn {n, _} -> n end) end
   end
 
   defp wait_until(fun, timeout_ms \\ 1_000, interval_ms \\ 10) do
@@ -70,18 +86,12 @@ defmodule VintageNetProxy.Interface.RetryTest do
 
   test "retries until PAC fetch succeeds, then stops",
        %{iface: iface, properties: properties} do
-    {fetcher, calls} =
-      counting_fetcher([
-        {:error, :nxdomain},
-        {:error, :nxdomain},
-        {:ok, "function FindProxyForURL(url, host) { return \"DIRECT\"; }"}
-      ])
-
-    start_with_fetcher!(iface, fetcher, [10, 20, 40])
+    calls = stub_fetcher([{:error, :nxdomain}, {:error, :nxdomain}, {:ok, @pac_script}])
+    start_tree!(iface)
 
     PropertyTable.put(VintageNet, properties.config, %{
       type: :fake,
-      proxy: %{mode: :auto, pac_url: "http://wpad.test.local/wpad.dat"}
+      proxy: %{mode: :auto, pac_url: @pac_url}
     })
 
     wait_until(fn ->
@@ -89,8 +99,8 @@ defmodule VintageNetProxy.Interface.RetryTest do
       if is_binary(proxy.pac_script), do: {:ok, proxy}, else: :error
     end)
 
-    # Third call succeeded; nothing more should fire after that. Sleep
-    # past the largest backoff and confirm the counter is steady.
+    # Third call succeeded; the chain should stop. Sleep past the
+    # largest backoff and confirm the counter is steady.
     Process.sleep(80)
     final_count = calls.()
     assert final_count >= 3
@@ -100,26 +110,19 @@ defmodule VintageNetProxy.Interface.RetryTest do
 
   test "a VintageNet event cancels the pending retry and re-fetches immediately",
        %{iface: iface, properties: properties} do
-    {fetcher, calls} =
-      counting_fetcher([
-        {:error, :nxdomain},
-        {:ok, "function FindProxyForURL(url, host) { return \"DIRECT\"; }"}
-      ])
-
-    # First backoff is intentionally long so we can prove the event
-    # short-circuited it rather than the timer firing on its own.
-    start_with_fetcher!(iface, fetcher, [5_000, 5_000])
+    Application.put_env(:vintage_net_proxy, :retry_backoff_ms, [5_000, 5_000])
+    calls = stub_fetcher([{:error, :nxdomain}, {:ok, @pac_script}])
+    start_tree!(iface)
 
     PropertyTable.put(VintageNet, properties.config, %{
       type: :fake,
-      proxy: %{mode: :auto, pac_url: "http://wpad.test.local/wpad.dat"}
+      proxy: %{mode: :auto, pac_url: @pac_url}
     })
 
-    # Wait for the first (failed) attempt to be observed.
     wait_until(fn -> if calls.() >= 1, do: {:ok, :ok}, else: :error end)
 
     # Push a different URL through the config event — this should
-    # cancel the long retry timer and run a fresh fetch right away.
+    # invalidate the long retry timer and run a fresh fetch right away.
     PropertyTable.put(VintageNet, properties.config, %{
       type: :fake,
       proxy: %{mode: :auto, pac_url: "http://wpad.other.local/wpad.dat"}
@@ -137,15 +140,11 @@ defmodule VintageNetProxy.Interface.RetryTest do
 
   test "no retry scheduled when there is no PAC URL to fetch",
        %{iface: iface, properties: properties} do
-    {fetcher, calls} = counting_fetcher([{:error, :nxdomain}])
-    start_with_fetcher!(iface, fetcher, [10, 20, 40])
+    calls = stub_fetcher([{:error, :nxdomain}])
+    start_tree!(iface)
 
-    PropertyTable.put(VintageNet, properties.config, %{
-      type: :fake,
-      proxy: %{mode: :direct}
-    })
+    PropertyTable.put(VintageNet, properties.config, %{type: :fake, proxy: %{mode: :direct}})
 
-    # Flush the mailbox via a sync call, then wait past the schedule.
     _ = Interface.get(iface)
     Process.sleep(120)
     assert calls.() == 0

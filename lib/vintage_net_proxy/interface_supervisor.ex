@@ -11,12 +11,11 @@ defmodule VintageNetProxy.InterfaceSupervisor do
   @impl true
   def init(opts) do
     interfaces = Keyword.get(opts, :interfaces, []) || []
-    iface_opts = Keyword.take(opts, [:fetcher, :retry_backoff_ms])
 
     children =
       Enum.map(interfaces, fn iface ->
         Supervisor.child_spec(
-          {Interface, [iface: iface, parent: Selector] ++ iface_opts},
+          {Interface, iface: iface, parent: Selector},
           id: {Interface, iface}
         )
       end)

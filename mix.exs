@@ -32,6 +32,7 @@ defmodule VintageNetProxy.MixProject do
       # field through their `normalize/1` callbacks.
       {:vintage_net_ethernet, "~> 0.11", only: :test, runtime: false},
       {:vintage_net_wifi, "~> 0.12", only: :test, runtime: false},
+      {:mimic, "~> 1.7", only: :test},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end

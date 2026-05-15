@@ -4,15 +4,15 @@ defmodule VintageNetProxy.Interface do
 
   One process per network interface. Subscribes to the interface's
   PropertyTable keys (`config`, `dhcp_options`, `connection`,
-  `addresses`), keeps an `Interface.Proxy` value up to date, runs the
-  injected `fetcher` synchronously inside its own mailbox, and pushes
+  `addresses`), keeps an `Interface.Proxy` value up to date, runs
+  `Fetcher.get/1` synchronously inside its own mailbox, and pushes
   the updated proxy to the Selector on every change.
 
   All decisions — what URL to fetch, what proxy to publish, what to
   resolve a URL to — live in `VintageNetProxy.Interface.Proxy`. The
   shell here only subscribes, reads the raw payloads, dispatches them
-  through `Proxy.put_*` functions, supplies the fetcher, schedules
-  retries on transient failures, and forwards the result.
+  through `Proxy.put_*` functions, schedules retries on transient
+  failures, and forwards the result.
 
   ### PAC fetch retry
 
@@ -23,11 +23,16 @@ defmodule VintageNetProxy.Interface do
   `pac_script: nil` until the next VintageNet event happened to nudge
   it. We avoid that: whenever `Proxy.fetch_target/1` reports a fetch
   is still owed after `refresh_cache/2`, the interface schedules a
-  `{:retry_fetch, token}` message with exponential backoff. Each
+  `{:retry_fetch, token}` message on a backoff schedule. Each
   scheduled retry carries a fresh token; the handler only acts when
   the token matches the state's current one, so a VintageNet event
   invalidates pending retries by simply clearing the token. Success
   ends the chain.
+
+  The backoff schedule defaults to `[1s, 2s, 4s, 8s, 16s, 32s, 60s]`
+  (caps at 60s thereafter) and is overridable via
+  `config :vintage_net_proxy, :retry_backoff_ms, [...]` — mainly used
+  by the test suite to shrink delays.
 
   See the Architecture section of the README for the full picture.
   """
@@ -41,7 +46,7 @@ defmodule VintageNetProxy.Interface do
 
   defmodule State do
     @moduledoc false
-    defstruct [:proxy, :parent, :fetcher, :backoff_ms, :retry_token, retry_attempt: 0]
+    defstruct [:proxy, :parent, :retry_token, retry_attempt: 0]
   end
 
   # --- Client API ---
@@ -78,21 +83,12 @@ defmodule VintageNetProxy.Interface do
   def init(opts) do
     iface = Keyword.fetch!(opts, :iface)
     parent = Keyword.fetch!(opts, :parent)
-    fetcher = Keyword.get(opts, :fetcher, &Fetcher.get/1)
-    backoff_ms = Keyword.get(opts, :retry_backoff_ms, @default_backoff_ms)
-
-    state = %State{
-      proxy: Proxy.new(iface),
-      parent: parent,
-      fetcher: fetcher,
-      backoff_ms: backoff_ms
-    }
-
+    state = %State{proxy: Proxy.new(iface), parent: parent}
     {:ok, state, {:continue, :startup}}
   end
 
   @impl true
-  def handle_continue(:startup, %State{proxy: proxy, fetcher: fetcher} = state) do
+  def handle_continue(:startup, %State{proxy: proxy} = state) do
     iface = proxy.iface
 
     Enum.each(["config", "dhcp_options", "connection", "addresses"], fn prop ->
@@ -105,7 +101,7 @@ defmodule VintageNetProxy.Interface do
       |> Proxy.put_intent_from_config(VintageNet.get(["interface", iface, "config"]))
       |> Proxy.put_dhcp_options(VintageNet.get(["interface", iface, "dhcp_options"]))
       |> Proxy.put_addresses(VintageNet.get(["interface", iface, "addresses"]))
-      |> Proxy.refresh_cache(fetcher)
+      |> Proxy.refresh_cache(&Fetcher.get/1)
 
     push(state.parent, proxy)
     {:noreply, maybe_schedule_retry(%{state | proxy: proxy})}
@@ -129,9 +125,9 @@ defmodule VintageNetProxy.Interface do
 
   def handle_info(
         {:retry_fetch, token},
-        %State{retry_token: token, proxy: proxy, fetcher: fetcher} = state
+        %State{retry_token: token, proxy: proxy} = state
       ) do
-    proxy = Proxy.refresh_cache(proxy, fetcher)
+    proxy = Proxy.refresh_cache(proxy, &Fetcher.get/1)
     push(state.parent, proxy)
 
     state = %{state | proxy: proxy, retry_token: nil, retry_attempt: state.retry_attempt + 1}
@@ -149,11 +145,11 @@ defmodule VintageNetProxy.Interface do
   # Any VintageNet event nils the retry token (invalidating any pending
   # timer) and resets the attempt counter, then re-evaluates whether a
   # fresh retry is owed against the post-event state.
-  defp handle_event(%State{fetcher: fetcher} = state, change_fn) do
+  defp handle_event(state, change_fn) do
     proxy =
       state.proxy
       |> Proxy.transition(change_fn)
-      |> Proxy.refresh_cache(fetcher)
+      |> Proxy.refresh_cache(&Fetcher.get/1)
 
     push(state.parent, proxy)
     {:noreply, maybe_schedule_retry(%{state | proxy: proxy, retry_token: nil, retry_attempt: 0})}
@@ -183,7 +179,8 @@ defmodule VintageNetProxy.Interface do
     %{state | retry_token: token}
   end
 
-  defp retry_delay(%State{backoff_ms: schedule, retry_attempt: attempt}) do
+  defp retry_delay(%State{retry_attempt: attempt}) do
+    schedule = Application.get_env(:vintage_net_proxy, :retry_backoff_ms, @default_backoff_ms)
     Enum.at(schedule, min(attempt, length(schedule) - 1))
   end
 
