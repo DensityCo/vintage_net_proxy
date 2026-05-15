@@ -449,6 +449,16 @@ Per-interface GenServers split the problem geographically:
     tagging or "is this result still valid?" check is needed in the
     code path.
 
+  * Transient fetch failures retry with exponential backoff
+    (`[1s, 2s, 4s, 8s, 16s, 32s, 60s]`, then caps at 60s). The
+    canonical case is the DNS race where `dhcp_options` delivers the
+    WPAD URL milliseconds before the WPAD host is resolvable —
+    without a retry, the Interface would sit on `pac_script: nil`
+    until something else nudged it. Any inbound VintageNet event
+    cancels the pending retry and resets the attempt counter so a
+    real state change re-fetches immediately; a successful fetch
+    ends the chain.
+
 ### Fast startup
 
 `Interface.init/1` is a true no-op — it just stashes the iface name

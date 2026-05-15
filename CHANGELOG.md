@@ -61,6 +61,21 @@ proxy at `["proxy", "config"]`.
   any public bundle. If you need cryptographic authenticity for
   your PAC, fetch it out-of-band and configure `manual` mode.
 
+### PAC fetch retry
+
+* `VintageNetProxy.Interface` retries a failed PAC fetch with
+  exponential backoff (default: 1s, 2s, 4s, 8s, 16s, 32s, 60s; caps
+  at 60s thereafter). Without this, a transient failure — typically
+  a DNS race where `dhcp_options` delivers the WPAD URL milliseconds
+  before `wpad.<domain>` is resolvable — would leave the interface
+  at `pac_script: nil` until the next external event happened to
+  nudge `refresh_cache/2`. Any inbound VintageNet event
+  (`config`, `dhcp_options`, `connection`, `addresses`) cancels the
+  pending retry and resets the attempt counter; a successful fetch
+  cancels the chain. The backoff schedule and fetcher are injectable
+  via `VintageNetProxy.Supervisor` opts (`retry_backoff_ms:` and
+  `fetcher:`) for testing.
+
 ### Connectivity checker
 
 * `VintageNetProxy.Connectivity` — optional, off by default. Enable
