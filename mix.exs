@@ -9,6 +9,7 @@ defmodule VintageNetProxy.MixProject do
       app: :vintage_net_proxy,
       version: @version,
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: description(),
@@ -17,6 +18,9 @@ defmodule VintageNetProxy.MixProject do
       source_url: @source_url
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   def application do
     [
