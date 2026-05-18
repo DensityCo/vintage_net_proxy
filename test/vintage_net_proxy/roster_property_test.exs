@@ -27,13 +27,11 @@ defmodule VintageNetProxy.RosterPropertyTest do
   end
 
   defp roster_gen do
-    gen all(
-          interfaces <- iface_names_gen(),
-          proxies_by_iface <-
-            StreamData.fixed_map(
-              Map.new(interfaces, fn iface -> {iface, TestGenerators.proxy(iface)} end)
-            )
-        ) do
+    gen all interfaces <- iface_names_gen(),
+            proxies_by_iface <-
+              StreamData.fixed_map(
+                Map.new(interfaces, fn iface -> {iface, TestGenerators.proxy(iface)} end)
+              ) do
       Roster.new(interfaces, proxies_by_iface)
     end
   end
@@ -42,14 +40,12 @@ defmodule VintageNetProxy.RosterPropertyTest do
   # priority list have no stored proxy yet (simulating fresh boot
   # before each Interface has pushed).
   defp partial_roster_gen do
-    gen all(
-          interfaces <- iface_names_gen(),
-          stored <- StreamData.list_of(StreamData.boolean(), length: length(interfaces)),
-          proxies <-
-            StreamData.fixed_list(
-              Enum.map(interfaces, fn iface -> TestGenerators.proxy(iface) end)
-            )
-        ) do
+    gen all interfaces <- iface_names_gen(),
+            stored <- StreamData.list_of(StreamData.boolean(), length: length(interfaces)),
+            proxies <-
+              StreamData.fixed_list(
+                Enum.map(interfaces, fn iface -> TestGenerators.proxy(iface) end)
+              ) do
       states =
         interfaces
         |> Enum.zip(Enum.zip(stored, proxies))
@@ -75,7 +71,7 @@ defmodule VintageNetProxy.RosterPropertyTest do
   # --- Properties ---
 
   property "value/1 is :unset iff no interface has an eligible proxy" do
-    check all(roster <- partial_roster_gen()) do
+    check all roster <- partial_roster_gen() do
       eligible_any? =
         Enum.any?(roster.interfaces, fn iface ->
           case Map.get(roster.states, iface) do
@@ -93,7 +89,7 @@ defmodule VintageNetProxy.RosterPropertyTest do
   end
 
   property "value/1 mirrors Proxy.value/1 of the first-eligible interface" do
-    check all(roster <- partial_roster_gen()) do
+    check all roster <- partial_roster_gen() do
       case first_eligible(roster) do
         nil -> assert Roster.value(roster) == :unset
         {_iface, proxy} -> assert Roster.value(roster) == Proxy.value(proxy)
@@ -102,10 +98,8 @@ defmodule VintageNetProxy.RosterPropertyTest do
   end
 
   property "status/2 active_iface points at the first-eligible interface" do
-    check all(
-            roster <- partial_roster_gen(),
-            published <- StreamData.constant(:unset)
-          ) do
+    check all roster <- partial_roster_gen(),
+              published <- StreamData.constant(:unset) do
       status = Roster.status(roster, published)
 
       case first_eligible(roster) do
@@ -116,7 +110,7 @@ defmodule VintageNetProxy.RosterPropertyTest do
   end
 
   property "every interface preceding the active one is non-eligible (or missing)" do
-    check all(roster <- partial_roster_gen()) do
+    check all roster <- partial_roster_gen() do
       case first_eligible(roster) do
         nil ->
           :ok
@@ -137,11 +131,9 @@ defmodule VintageNetProxy.RosterPropertyTest do
   # --- put_iface invariants ---
 
   property "put_iface for an iface NOT in the priority list is a no-op" do
-    check all(
-            roster <- roster_gen(),
-            stranger <- StreamData.string(:alphanumeric, min_length: 9, max_length: 16),
-            proxy <- TestGenerators.proxy(stranger)
-          ) do
+    check all roster <- roster_gen(),
+              stranger <- StreamData.string(:alphanumeric, min_length: 9, max_length: 16),
+              proxy <- TestGenerators.proxy(stranger) do
       # Filter out the rare collision where the stranger name actually
       # exists in the roster.
       if stranger not in roster.interfaces do
@@ -151,10 +143,8 @@ defmodule VintageNetProxy.RosterPropertyTest do
   end
 
   property "put_iface for an iface IN the priority list stores the proxy" do
-    check all(
-            roster <- roster_gen(),
-            new_proxy_seed <- TestGenerators.proxy()
-          ) do
+    check all roster <- roster_gen(),
+              new_proxy_seed <- TestGenerators.proxy() do
       iface = hd(roster.interfaces)
       new_proxy = %{new_proxy_seed | iface: iface}
       updated = Roster.put_iface(roster, iface, new_proxy)
@@ -163,10 +153,8 @@ defmodule VintageNetProxy.RosterPropertyTest do
   end
 
   property "put_iface is idempotent for repeated identical writes" do
-    check all(
-            roster <- roster_gen(),
-            new_proxy_seed <- TestGenerators.proxy()
-          ) do
+    check all roster <- roster_gen(),
+              new_proxy_seed <- TestGenerators.proxy() do
       iface = hd(roster.interfaces)
       new_proxy = %{new_proxy_seed | iface: iface}
       once = Roster.put_iface(roster, iface, new_proxy)
