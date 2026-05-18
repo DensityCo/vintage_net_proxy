@@ -1,5 +1,8 @@
 # VintageNetProxy
 
+[![CI](https://github.com/DensityCo/vintage_net_proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/DensityCo/vintage_net_proxy/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 Resolve a system HTTP proxy from a per-interface `:proxy` configuration
 field (optionally combined with DHCP Option 252 / WPAD discovery), and
 expose the result via the
