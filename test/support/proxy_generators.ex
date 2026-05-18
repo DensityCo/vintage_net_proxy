@@ -9,7 +9,7 @@ defmodule VintageNetProxy.TestGenerators do
   """
 
   import StreamData
-  import ExUnitProperties, only: [gen: 1]
+  import ExUnitProperties
 
   alias VintageNetProxy.Interface.Proxy
 
@@ -28,7 +28,7 @@ defmodule VintageNetProxy.TestGenerators do
   def port, do: integer(1..65_535)
 
   def pac_url do
-    gen all(host <- host()) do
+    gen all host <- host() do
       "http://#{host}.example/wpad.dat"
     end
   end
@@ -49,29 +49,25 @@ defmodule VintageNetProxy.TestGenerators do
   def auto_intent do
     one_of([
       constant(%{mode: :auto}),
-      gen all(url <- pac_url()) do
+      gen all url <- pac_url() do
         %{mode: :auto, pac_url: url}
       end
     ])
   end
 
   def manual_intent do
-    gen all(
-          scheme <- member_of(@schemes),
-          host <- host(),
-          port <- port()
-        ) do
+    gen all scheme <- member_of(@schemes),
+            host <- host(),
+            port <- port() do
       %{mode: :manual, scheme: scheme, host: host, port: port}
     end
   end
 
   # Manual intent with optional fields (credentials and/or bypass list).
   def manual_intent_with_optionals do
-    gen all(
-          base <- manual_intent(),
-          creds <- one_of([constant(nil), credentials_pair()]),
-          bypass <- one_of([constant(nil), list_of(host(), max_length: 3)])
-        ) do
+    gen all base <- manual_intent(),
+            creds <- one_of([constant(nil), credentials_pair()]),
+            bypass <- one_of([constant(nil), list_of(host(), max_length: 3)]) do
       base
       |> maybe_merge(creds)
       |> maybe_merge(if bypass, do: %{bypass: bypass}, else: nil)
@@ -79,10 +75,8 @@ defmodule VintageNetProxy.TestGenerators do
   end
 
   defp credentials_pair do
-    gen all(
-          u <- string(:alphanumeric, min_length: 1, max_length: 8),
-          p <- string(:alphanumeric, min_length: 1, max_length: 8)
-        ) do
+    gen all u <- string(:alphanumeric, min_length: 1, max_length: 8),
+            p <- string(:alphanumeric, min_length: 1, max_length: 8) do
       %{username: u, password: p}
     end
   end
@@ -93,13 +87,11 @@ defmodule VintageNetProxy.TestGenerators do
   # --- Proxy generator ---
 
   def proxy(iface \\ "test0") do
-    gen all(
-          intent <- intent(),
-          connection <- connection(),
-          dhcp_wpad_url <- one_of([constant(nil), pac_url()]),
-          dhcp_domain <- one_of([constant(nil), host()]),
-          pac_script <- one_of([constant(nil), pac_script()])
-        ) do
+    gen all intent <- intent(),
+            connection <- connection(),
+            dhcp_wpad_url <- one_of([constant(nil), pac_url()]),
+            dhcp_domain <- one_of([constant(nil), host()]),
+            pac_script <- one_of([constant(nil), pac_script()]) do
       %Proxy{
         iface: iface,
         intent: intent,
