@@ -15,88 +15,15 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   use ExUnitProperties
 
   alias VintageNetProxy.Interface.Proxy
+  alias VintageNetProxy.TestGenerators, as: Gen
   alias VintageNetProxy.Wpad
 
-  @up_states [:internet, :lan]
-  @non_up_states [:disconnected, :lan_with_no_dns, nil, :internet_pending]
-  @schemes [:http, :https, :socks4, :socks5]
-
-  # --- Generators ---
-
-  defp connection_gen do
-    StreamData.member_of(@up_states ++ @non_up_states)
-  end
-
-  defp host_gen do
-    StreamData.string(:alphanumeric, min_length: 1, max_length: 12)
-  end
-
-  defp port_gen do
-    StreamData.integer(1..65_535)
-  end
-
-  defp pac_url_gen do
-    gen all(host <- host_gen()) do
-      "http://#{host}.example/wpad.dat"
-    end
-  end
-
-  defp pac_script_gen do
-    StreamData.string(:printable, min_length: 1, max_length: 64)
-  end
-
-  defp intent_gen do
-    StreamData.one_of([
-      StreamData.constant(nil),
-      StreamData.constant(%{mode: :direct}),
-      auto_intent_gen(),
-      manual_intent_gen()
-    ])
-  end
-
-  defp auto_intent_gen do
-    StreamData.one_of([
-      StreamData.constant(%{mode: :auto}),
-      gen all(url <- pac_url_gen()) do
-        %{mode: :auto, pac_url: url}
-      end
-    ])
-  end
-
-  defp manual_intent_gen do
-    gen all(
-          scheme <- StreamData.member_of(@schemes),
-          host <- host_gen(),
-          port <- port_gen()
-        ) do
-      %{mode: :manual, scheme: scheme, host: host, port: port}
-    end
-  end
-
-  defp proxy_gen do
-    gen all(
-          intent <- intent_gen(),
-          connection <- connection_gen(),
-          dhcp_wpad_url <- StreamData.one_of([StreamData.constant(nil), pac_url_gen()]),
-          dhcp_domain <-
-            StreamData.one_of([StreamData.constant(nil), host_gen()]),
-          pac_script <- StreamData.one_of([StreamData.constant(nil), pac_script_gen()])
-        ) do
-      %Proxy{
-        iface: "test0",
-        intent: intent,
-        connection: connection,
-        dhcp_wpad_url: dhcp_wpad_url,
-        dhcp_domain: dhcp_domain,
-        pac_script: pac_script
-      }
-    end
-  end
+  @up_states Gen.up_states()
 
   # --- fetch_target / effective_pac_url consistency ---
 
   property "fetch_target == :none iff (script cached OR no effective URL)" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       script_cached? = is_binary(proxy.pac_script)
       url_available? = not is_nil(Proxy.effective_pac_url(proxy))
 
@@ -114,15 +41,15 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
 
   property "caching a script makes fetch_target == :none" do
     check all(
-            proxy <- proxy_gen(),
-            script <- pac_script_gen()
+            proxy <- Gen.proxy(),
+            script <- Gen.pac_script()
           ) do
       assert proxy |> Proxy.cache_script(script) |> Proxy.fetch_target() == :none
     end
   end
 
   property "effective_pac_url is nil whenever connection is not up" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       if proxy.connection not in @up_states do
         assert Proxy.effective_pac_url(proxy) == nil
       end
@@ -132,9 +59,9 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   property "effective_pac_url precedence: intent.pac_url > dhcp_wpad_url > dhcp_domain" do
     check all(
             connection <- StreamData.member_of(@up_states),
-            pac_url <- pac_url_gen(),
-            dhcp_wpad <- pac_url_gen(),
-            dhcp_domain <- host_gen()
+            pac_url <- Gen.pac_url(),
+            dhcp_wpad <- Gen.pac_url(),
+            dhcp_domain <- Gen.host()
           ) do
       base = %Proxy{
         iface: "test0",
@@ -157,14 +84,14 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   # --- value consistency ---
 
   property "value/1 returns a value from the documented enumeration" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       assert Proxy.value(proxy) in [:unset, :direct, {:auto, :ready}, {:auto, :no_pac}] or
                match?({:manual, %{scheme: _, host: _, port: _}}, Proxy.value(proxy))
     end
   end
 
   property "value == {:auto, :ready} requires a cached pac_script" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       if Proxy.value(proxy) == {:auto, :ready} do
         assert is_binary(proxy.pac_script)
         assert match?(%{mode: :auto}, proxy.intent)
@@ -173,7 +100,7 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   end
 
   property "value == :unset requires no intent" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       if Proxy.value(proxy) == :unset do
         assert proxy.intent == nil
       end
@@ -181,7 +108,7 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   end
 
   property "direct and manual modes never need a PAC fetch" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       case Proxy.value(proxy) do
         :direct -> assert Proxy.fetch_target(proxy) == :none
         {:manual, _} -> assert Proxy.fetch_target(proxy) == :none
@@ -193,14 +120,14 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   # --- eligible? consistency ---
 
   property "eligible? iff intent present AND connection is up" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       expected = not is_nil(proxy.intent) and proxy.connection in @up_states
       assert Proxy.eligible?(proxy) == expected
     end
   end
 
   property "eligible? implies value is not :unset" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       if Proxy.eligible?(proxy) do
         refute Proxy.value(proxy) == :unset
       end
@@ -210,16 +137,16 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   # --- transition invariants ---
 
   property "transition with an identity change_fn preserves pac_script" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       assert Proxy.transition(proxy, & &1).pac_script == proxy.pac_script
     end
   end
 
   property "transition clears pac_script iff effective URL changed" do
     check all(
-            proxy <- proxy_gen(),
-            new_intent <- intent_gen(),
-            new_connection <- connection_gen()
+            proxy <- Gen.proxy(),
+            new_intent <- Gen.intent(),
+            new_connection <- Gen.connection()
           ) do
       change_fn = fn p -> %{p | intent: new_intent, connection: new_connection} end
       old_url = Proxy.effective_pac_url(proxy)
@@ -237,7 +164,7 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   # --- refresh_cache invariants ---
 
   property "refresh_cache with an error fetcher leaves the proxy unchanged" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       fetcher = fn _url -> {:error, :nope} end
       assert Proxy.refresh_cache(proxy, fetcher) == proxy
     end
@@ -245,8 +172,8 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
 
   property "refresh_cache with a successful fetcher caches the script iff a fetch was owed" do
     check all(
-            proxy <- proxy_gen(),
-            script <- pac_script_gen()
+            proxy <- Gen.proxy(),
+            script <- Gen.pac_script()
           ) do
       fetcher = fn _url -> {:ok, script} end
       result = Proxy.refresh_cache(proxy, fetcher)
@@ -259,7 +186,7 @@ defmodule VintageNetProxy.Interface.ProxyPropertyTest do
   end
 
   property "refresh_cache never calls fetcher when no fetch is owed" do
-    check all(proxy <- proxy_gen()) do
+    check all(proxy <- Gen.proxy()) do
       fetcher = fn _url -> flunk("fetcher should not have been called") end
 
       if Proxy.fetch_target(proxy) == :none do
