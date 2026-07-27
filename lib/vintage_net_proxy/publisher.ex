@@ -6,10 +6,10 @@ defmodule VintageNetProxy.Publisher do
       (`:unset | :direct | :auto | proxy_descriptor`).
     * `["proxy", "pac_revision"]` — a monotonic tick that fires when
       the active interface's PAC script content changes *in place*
-      (same effective URL, new body). This is an internal signal used
-      by `VintageNetProxy.Connectivity` to re-probe; the value carries
-      no meaning beyond "something changed." Not part of the
-      consumer-facing contract.
+      (same effective URL, new body). The value carries no meaning beyond
+      "something changed." Consumers should use
+      `VintageNetProxy.subscribe_changes/0` rather than subscribing to this
+      property directly.
 
   Selector is the only writer.
   """
@@ -28,6 +28,13 @@ defmodule VintageNetProxy.Publisher do
 
   @doc "Path of the PAC-revision tick property."
   def pac_revision_property, do: @pac_revision_property
+
+  @doc false
+  defguard is_change(message)
+           when is_tuple(message) and tuple_size(message) == 5 and
+                  elem(message, 0) == VintageNet and
+                  elem(message, 1) in [@property, @pac_revision_property] and
+                  elem(message, 2) != elem(message, 3)
 
   @doc """
   Publish a fresh PAC-revision value. Fires a change event on the

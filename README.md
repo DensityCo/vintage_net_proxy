@@ -118,23 +118,26 @@ strict shape is meant to prevent. If your deployment is happy with
 direct on resolution failure, you write that collapse; if it isn't,
 you handle the reasons individually.
 
-When subscribing to the published property — e.g. so independent
-outbound clients (MQTT, WebSocket) can drop and reconnect when the
-proxy changes — match on the tagged shape:
+Independent outbound clients (MQTT, WebSocket) should subscribe to all
+changes that can alter routing. This includes in-place PAC reloads that
+leave the published proxy model unchanged:
 
 ```elixir
-VintageNet.subscribe(VintageNetProxy.property())
+require VintageNetProxy
 
-def handle_info({VintageNet, ["proxy", "config"], _, proxy, _}, state) do
-  case proxy do
-    :unset                  -> {:noreply, hold(state)}          # wait
-    :direct                 -> {:noreply, reconnect(state, :direct)}
-    {:manual, descriptor}   -> {:noreply, reconnect(state, descriptor)}
-    {:auto, :ready}         -> {:noreply, reconnect(state, :auto)}
-    {:auto, :no_pac}        -> {:noreply, hold(state)}
-  end
+def init(state) do
+  :ok = VintageNetProxy.subscribe_changes()
+  {:ok, state}
+end
+
+def handle_info(message, state) when VintageNetProxy.is_change(message) do
+  {:noreply, reconnect(state)}
 end
 ```
+
+Use `VintageNetProxy.subscribe/0` instead when the consumer only needs
+changes to the published proxy model and does not need to react to an
+in-place PAC reload.
 
 Consumers that just want the simple "is the proxy ready" gate:
 

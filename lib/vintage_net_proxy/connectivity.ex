@@ -92,9 +92,9 @@ defmodule VintageNetProxy.Connectivity do
   alias VintageNetProxy.Connectivity.Probe
   alias VintageNetProxy.Publisher
 
+  require VintageNetProxy
+
   @property ["proxy", "connectivity"]
-  @config_path ["proxy", "config"]
-  @pac_revision_path ["proxy", "pac_revision"]
   @default_probe_urls [
     "https://connectivitycheck.gstatic.com/generate_204",
     "https://detectportal.firefox.com/success.txt",
@@ -170,8 +170,7 @@ defmodule VintageNetProxy.Connectivity do
     initial_delay = Keyword.get(opts, :initial_delay, @default_initial_delay)
 
     publish(:unknown)
-    VintageNet.subscribe(@config_path)
-    VintageNet.subscribe(@pac_revision_path)
+    VintageNetProxy.subscribe_changes()
 
     state = %__MODULE__{
       probe_urls: probe_urls,
@@ -205,8 +204,7 @@ defmodule VintageNetProxy.Connectivity do
   # exists specifically because in-place PAC reloads leave `config`
   # unchanged at `{:auto, :ready}`; see `VintageNetProxy.Publisher` for
   # the why.
-  def handle_info({VintageNet, path, _old, _new, _meta}, state)
-      when path in [@config_path, @pac_revision_path] do
+  def handle_info(message, state) when VintageNetProxy.is_change(message) do
     cancel(state.timer)
     {:noreply, %{state | timer: arm(0)}}
   end
