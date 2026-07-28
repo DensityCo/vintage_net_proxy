@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-07-27
+
+* Simplified proxy change subscriptions to explicit VintageNet property
+  subscriptions.
+
 ## 0.1.1 - 2026-07-27
 
 * `VintageNetProxy.subscribe/0` and `unsubscribe/0` now cover both

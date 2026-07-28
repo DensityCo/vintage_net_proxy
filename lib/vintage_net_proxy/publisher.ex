@@ -30,9 +30,6 @@ defmodule VintageNetProxy.Publisher do
   def pac_revision_property, do: @pac_revision_property
 
   @doc false
-  def change_properties, do: [@property, @pac_revision_property]
-
-  @doc false
   defguard is_change(message)
            when is_tuple(message) and tuple_size(message) == 5 and
                   elem(message, 0) == VintageNet and

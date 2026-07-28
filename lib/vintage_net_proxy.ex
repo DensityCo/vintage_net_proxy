@@ -153,14 +153,16 @@ defmodule VintageNetProxy do
   """
   @spec subscribe() :: :ok
   def subscribe do
-    Enum.each(Publisher.change_properties(), &VintageNet.subscribe/1)
+    :ok = VintageNet.subscribe(Publisher.property())
+    :ok = VintageNet.subscribe(Publisher.pac_revision_property())
     :ok
   end
 
   @doc "Unsubscribe from proxy routing changes."
   @spec unsubscribe() :: :ok
   def unsubscribe do
-    Enum.each(Publisher.change_properties(), &VintageNet.unsubscribe/1)
+    :ok = VintageNet.unsubscribe(Publisher.property())
+    :ok = VintageNet.unsubscribe(Publisher.pac_revision_property())
     :ok
   end
 
