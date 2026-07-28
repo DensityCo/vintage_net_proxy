@@ -1,7 +1,7 @@
 defmodule VintageNetProxy.MixProject do
   use Mix.Project
 
-  @version "0.1.2"
+  @version "0.1.3"
   @source_url "https://github.com/DensityCo/vintage_net_proxy"
 
   def project do
@@ -31,7 +31,7 @@ defmodule VintageNetProxy.MixProject do
 
   defp deps do
     [
-      {:vintage_net, "~> 0.13"},
+      {:vintage_net, "~> 0.13", optional: true},
       # Test-only: confirms real consumer technologies preserve the `:proxy`
       # field through their `normalize/1` callbacks.
       {:vintage_net_ethernet, "~> 0.11", only: :test, runtime: false},
