@@ -1,7 +1,7 @@
 defmodule VintageNetProxy.MixProject do
   use Mix.Project
 
-  @version "0.1.3"
+  @version "0.1.4"
   @source_url "https://github.com/DensityCo/vintage_net_proxy"
 
   def project do
@@ -12,6 +12,7 @@ defmodule VintageNetProxy.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      xref: [exclude: [PropertyTable, VintageNet]],
       description: description(),
       package: package(),
       docs: docs(),
@@ -25,6 +26,7 @@ defmodule VintageNetProxy.MixProject do
   def application do
     [
       extra_applications: [:logger, :inets, :ssl],
+      optional_applications: [:vintage_net],
       mod: {VintageNetProxy.Application, []}
     ]
   end
