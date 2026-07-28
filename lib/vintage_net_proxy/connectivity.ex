@@ -170,7 +170,7 @@ defmodule VintageNetProxy.Connectivity do
     initial_delay = Keyword.get(opts, :initial_delay, @default_initial_delay)
 
     publish(:unknown)
-    VintageNetProxy.subscribe_changes()
+    VintageNetProxy.subscribe()
 
     state = %__MODULE__{
       probe_urls: probe_urls,

@@ -126,7 +126,7 @@ leave the published proxy model unchanged:
 require VintageNetProxy
 
 def init(state) do
-  :ok = VintageNetProxy.subscribe_changes()
+  :ok = VintageNetProxy.subscribe()
   {:ok, state}
 end
 
@@ -135,9 +135,8 @@ def handle_info(message, state) when VintageNetProxy.is_change(message) do
 end
 ```
 
-Use `VintageNetProxy.subscribe/0` instead when the consumer only needs
-changes to the published proxy model and does not need to react to an
-in-place PAC reload.
+Consumers that only need changes to the published proxy model can subscribe
+directly to `VintageNetProxy.property/0` with `VintageNet.subscribe/1`.
 
 Consumers that just want the simple "is the proxy ready" gate:
 

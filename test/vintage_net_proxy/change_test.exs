@@ -11,7 +11,7 @@ defmodule VintageNetProxy.ChangeTest do
     PropertyTable.delete(VintageNet, @pac_revision_property)
 
     on_exit(fn ->
-      VintageNetProxy.unsubscribe_changes()
+      VintageNetProxy.unsubscribe()
       PropertyTable.delete(VintageNet, @proxy_property)
       PropertyTable.delete(VintageNet, @pac_revision_property)
     end)
@@ -20,7 +20,7 @@ defmodule VintageNetProxy.ChangeTest do
   end
 
   test "subscribes to resolved proxy model changes" do
-    assert :ok = VintageNetProxy.subscribe_changes()
+    assert :ok = VintageNetProxy.subscribe()
 
     PropertyTable.put(VintageNet, @proxy_property, :direct)
 
@@ -29,7 +29,7 @@ defmodule VintageNetProxy.ChangeTest do
   end
 
   test "subscribes to in-place PAC reloads" do
-    assert :ok = VintageNetProxy.subscribe_changes()
+    assert :ok = VintageNetProxy.subscribe()
 
     PropertyTable.put(VintageNet, @pac_revision_property, 1)
 
@@ -37,8 +37,8 @@ defmodule VintageNetProxy.ChangeTest do
     assert proxy_change?(message)
   end
 
-  test "keeps subscribe config-only" do
-    assert :ok = VintageNetProxy.subscribe()
+  test "supports an explicit config-only subscription" do
+    assert :ok = VintageNet.subscribe(VintageNetProxy.property())
 
     PropertyTable.put(VintageNet, @pac_revision_property, 1)
     refute_receive {VintageNet, @pac_revision_property, _, _, _}
@@ -53,8 +53,8 @@ defmodule VintageNetProxy.ChangeTest do
   end
 
   test "unsubscribes from both change properties" do
-    assert :ok = VintageNetProxy.subscribe_changes()
-    assert :ok = VintageNetProxy.unsubscribe_changes()
+    assert :ok = VintageNetProxy.subscribe()
+    assert :ok = VintageNetProxy.unsubscribe()
 
     PropertyTable.put(VintageNet, @proxy_property, :direct)
     PropertyTable.put(VintageNet, @pac_revision_property, 1)

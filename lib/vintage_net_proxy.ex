@@ -144,32 +144,24 @@ defmodule VintageNetProxy do
   @spec property() :: [String.t()]
   def property, do: Publisher.property()
 
-  @doc "Subscribe to changes on the resolved proxy property."
-  @spec subscribe() :: :ok
-  def subscribe, do: VintageNet.subscribe(Publisher.property())
-
-  @doc "Unsubscribe from the resolved proxy property."
-  @spec unsubscribe() :: :ok
-  def unsubscribe, do: VintageNet.unsubscribe(Publisher.property())
-
   @doc """
   Subscribe to changes that can alter proxy routing decisions.
 
-  Unlike `subscribe/0`, this also reports in-place PAC script reloads whose
+  Reports resolved proxy model changes and in-place PAC script reloads whose
   resolved proxy model remains `{:auto, :ready}`. Use `is_change/1` in the
   receiving process to match both event shapes.
   """
-  @spec subscribe_changes() :: :ok
-  def subscribe_changes do
-    :ok = subscribe()
-    VintageNet.subscribe(Publisher.pac_revision_property())
+  @spec subscribe() :: :ok
+  def subscribe do
+    Enum.each(Publisher.change_properties(), &VintageNet.subscribe/1)
+    :ok
   end
 
   @doc "Unsubscribe from proxy routing changes."
-  @spec unsubscribe_changes() :: :ok
-  def unsubscribe_changes do
-    :ok = unsubscribe()
-    VintageNet.unsubscribe(Publisher.pac_revision_property())
+  @spec unsubscribe() :: :ok
+  def unsubscribe do
+    Enum.each(Publisher.change_properties(), &VintageNet.unsubscribe/1)
+    :ok
   end
 
   @doc """

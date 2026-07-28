@@ -8,7 +8,7 @@ defmodule VintageNetProxy.Publisher do
       the active interface's PAC script content changes *in place*
       (same effective URL, new body). The value carries no meaning beyond
       "something changed." Consumers should use
-      `VintageNetProxy.subscribe_changes/0` rather than subscribing to this
+      `VintageNetProxy.subscribe/0` rather than subscribing to this
       property directly.
 
   Selector is the only writer.
@@ -28,6 +28,9 @@ defmodule VintageNetProxy.Publisher do
 
   @doc "Path of the PAC-revision tick property."
   def pac_revision_property, do: @pac_revision_property
+
+  @doc false
+  def change_properties, do: [@property, @pac_revision_property]
 
   @doc false
   defguard is_change(message)
