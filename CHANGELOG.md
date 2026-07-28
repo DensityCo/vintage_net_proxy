@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-07-27
+
+* `VintageNetProxy.subscribe/0` and `unsubscribe/0` now cover both
+  resolved proxy model changes and in-place PAC script reloads.
+* Added the `VintageNetProxy.is_change/1` guard for matching both
+  routing-change event shapes.
+
+## 0.1.0
+
 Initial design. Proxy configuration is expressed as a `:proxy` field
 inside a VintageNet interface configuration map; the library reads
 that intent from `["interface", ifname, "config"]` and combines it
