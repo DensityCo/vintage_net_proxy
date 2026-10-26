@@ -50,11 +50,15 @@ defmodule VintageNetProxy.ConnectivityTest do
     end
 
     test "uses the currently published manual proxy" do
-      port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
+      port = capturing_proxy(self(), "HTTP/1.1 200 OK\r\n\r\n")
       descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
       PropertyTable.put(VintageNet, @config_property, {:manual, descriptor})
 
-      assert VintageNetProxy.probe_connectivity(["https://target.test/"]) == :ok
+      assert VintageNetProxy.probe_connectivity(["https://target.test:8443/"]) == :ok
+
+      assert_receive {:proxy_request, request}, 5_000
+      assert request =~ "CONNECT target.test:8443 HTTP/1.1"
+      assert request =~ "Host: target.test:8443"
     end
 
     test "tries fallback URLs and returns the last error when none succeed" do
@@ -310,6 +314,24 @@ defmodule VintageNetProxy.ConnectivityTest do
     on_exit(fn -> :gen_tcp.close(lsock) end)
 
     spawn_link(fn -> proxy_loop(lsock, response) end)
+    port
+  end
+
+  defp capturing_proxy(test_pid, response) do
+    {:ok, lsock} =
+      :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
+
+    {:ok, port} = :inet.port(lsock)
+    on_exit(fn -> :gen_tcp.close(lsock) end)
+
+    spawn_link(fn ->
+      {:ok, sock} = :gen_tcp.accept(lsock, 60_000)
+      {:ok, request} = :gen_tcp.recv(sock, 0, 5_000)
+      send(test_pid, {:proxy_request, request})
+      :gen_tcp.send(sock, response)
+      :gen_tcp.close(sock)
+    end)
+
     port
   end
 
