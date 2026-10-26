@@ -36,6 +36,48 @@ defmodule VintageNetProxy.ConnectivityTest do
     end
   end
 
+  describe "one-shot probe" do
+    test "works without the scheduled connectivity checker and does not publish" do
+      port = accepting_target()
+      PropertyTable.delete(VintageNet, @connectivity_property)
+
+      assert Process.whereis(Connectivity) == nil
+
+      assert VintageNetProxy.probe_connectivity(["http://127.0.0.1:#{port}/"]) ==
+               :ok
+
+      assert VintageNet.get(@connectivity_property, :unknown) == :unknown
+    end
+
+    test "uses the currently published manual proxy" do
+      port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
+      descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+      PropertyTable.put(VintageNet, @config_property, {:manual, descriptor})
+
+      assert VintageNetProxy.probe_connectivity(["https://target.test/"]) == :ok
+    end
+
+    test "tries fallback URLs and returns the last error when none succeed" do
+      port = accepting_target()
+
+      assert VintageNetProxy.probe_connectivity([
+               "http://127.0.0.1:1/",
+               "http://127.0.0.1:#{port}/"
+             ]) == :ok
+
+      assert {:error, _reason} =
+               VintageNetProxy.probe_connectivity([
+                 "http://127.0.0.1:1/",
+                 "http://127.0.0.1:2/"
+               ])
+    end
+
+    test "reports an empty URL list" do
+      assert VintageNetProxy.probe_connectivity([]) ==
+               {:error, :no_probe_urls_configured}
+    end
+  end
+
   describe "first probe — direct path" do
     test "publishes :ok against a healthy direct target" do
       port = accepting_target()

@@ -270,4 +270,19 @@ defmodule VintageNetProxy do
   """
   @spec check_connectivity() :: connectivity()
   def check_connectivity, do: Connectivity.check_now()
+
+  @doc """
+  Run a one-shot, proxy-aware connectivity probe against `probe_urls`.
+
+  Unlike `check_connectivity/0`, this does not require the scheduled
+  connectivity checker to be running. It reads the current proxy model,
+  resolves PAC decisions per URL, and tries each URL in order until one
+  succeeds. The result is returned directly and is not published to the
+  VintageNet property table.
+
+  This is useful when another process owns probe scheduling and recovery
+  policy.
+  """
+  @spec probe_connectivity([String.t()]) :: :ok | {:error, term()}
+  def probe_connectivity(probe_urls), do: Connectivity.probe(probe_urls)
 end
