@@ -61,6 +61,45 @@ defmodule VintageNetProxy.ConnectivityTest do
       assert request =~ "Host: target.test:8443"
     end
 
+    test "uses the PAC-selected proxy without the scheduled checker" do
+      proxy_port = capturing_proxy(self(), "HTTP/1.1 200 OK\r\n\r\n")
+      pac = ~s|function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:#{proxy_port}"; }|
+      configure_auto_proxy(pac)
+
+      assert Process.whereis(Connectivity) == nil
+      assert VintageNetProxy.probe_connectivity(["https://target.test:8443/"]) == :ok
+
+      assert_receive {:proxy_request, request}, 5_000
+      assert request =~ "CONNECT target.test:8443 HTTP/1.1"
+    end
+
+    test "resolves PAC independently for each fallback URL" do
+      direct_port = accepting_target()
+
+      pac = """
+      function FindProxyForURL(url, host) {
+        if (host == "first.test") return "PROXY 127.0.0.1:1";
+        return "DIRECT";
+      }
+      """
+
+      configure_auto_proxy(pac)
+
+      assert VintageNetProxy.probe_connectivity([
+               "https://first.test/",
+               "http://127.0.0.1:#{direct_port}/"
+             ]) == :ok
+    end
+
+    test "preserves an existing published connectivity result" do
+      port = accepting_target()
+      previous = {:error, :previous_probe_failed}
+      PropertyTable.put(VintageNet, @connectivity_property, previous)
+
+      assert VintageNetProxy.probe_connectivity(["http://127.0.0.1:#{port}/"]) == :ok
+      assert VintageNet.get(@connectivity_property) == previous
+    end
+
     test "tries fallback URLs and returns the last error when none succeed" do
       port = accepting_target()
 
@@ -247,25 +286,8 @@ defmodule VintageNetProxy.ConnectivityTest do
 
     test "{:auto, :ready} → calls VintageNetProxy.resolve and probes via the PAC's proxy" do
       proxy_port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
-
-      # Bring up a full Selector + an Interface snapshot whose PAC
-      # routes everything through the fake proxy. The Connectivity
-      # decision for {:auto, :ready} flows through VintageNetProxy.resolve,
-      # which needs the Selector running to answer.
-      iface = "ifc#{:erlang.unique_integer([:positive])}"
-      start_supervised!({VintageNetProxy.Selector, interfaces: [iface]})
-
       pac = ~s|function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:#{proxy_port}"; }|
-
-      snap = %VintageNetProxy.Interface.Proxy{
-        iface: iface,
-        intent: %{mode: :auto},
-        connection: :internet,
-        pac_script: pac
-      }
-
-      send(VintageNetProxy.Selector, {:interface_changed, iface, snap})
-      _ = VintageNetProxy.status()
+      configure_auto_proxy(pac)
 
       start_checker(probe_urls: ["https://target.test/"], initial_delay: 60_000)
 
@@ -278,6 +300,22 @@ defmodule VintageNetProxy.ConnectivityTest do
   defp start_checker(opts) do
     opts = Keyword.put_new(opts, :initial_delay, 0)
     start_supervised!({Connectivity, opts})
+  end
+
+  defp configure_auto_proxy(pac) do
+    iface = "ifc#{:erlang.unique_integer([:positive])}"
+    start_supervised!({VintageNetProxy.Selector, interfaces: [iface]})
+
+    snapshot = %VintageNetProxy.Interface.Proxy{
+      iface: iface,
+      intent: %{mode: :auto},
+      connection: :internet,
+      pac_script: pac
+    }
+
+    send(VintageNetProxy.Selector, {:interface_changed, iface, snapshot})
+    _ = VintageNetProxy.status()
+    :ok
   end
 
   # Listener that keeps accepting connections, closing each immediately.
