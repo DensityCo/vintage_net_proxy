@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-10-26
+
+* Added `VintageNetProxy.probe_connectivity/1` for stateless, one-shot
+  connectivity checks that honor direct, manual proxy, and PAC settings.
+
 ## 0.1.2 - 2026-07-27
 
 * Simplified proxy change subscriptions to explicit VintageNet property

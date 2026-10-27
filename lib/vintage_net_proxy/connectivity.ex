@@ -120,6 +120,15 @@ defmodule VintageNetProxy.Connectivity do
   @spec get() :: status()
   def get, do: VintageNet.get(@property, :unknown)
 
+  @doc """
+  Run a one-shot, proxy-aware probe without requiring this GenServer to run.
+
+  Probe URLs are tried in order and the first successful result wins. This
+  function does not publish its result or manage a periodic timer.
+  """
+  @spec probe([String.t()]) :: :ok | {:error, term()}
+  def probe(probe_urls) when is_list(probe_urls), do: run_probes(probe_urls)
+
   @doc "Subscribe to connectivity state changes."
   @spec subscribe() :: :ok
   def subscribe, do: VintageNet.subscribe(@property)
@@ -184,7 +193,7 @@ defmodule VintageNetProxy.Connectivity do
   @impl true
   def handle_call(:probe_now, _from, state) do
     cancel(state.timer)
-    state = probe(state)
+    state = update_status(state)
     {:reply, state.status, %{state | timer: arm(state.interval)}}
   end
 
@@ -195,7 +204,7 @@ defmodule VintageNetProxy.Connectivity do
 
   @impl true
   def handle_info(:probe, state) do
-    state = probe(%{state | timer: nil})
+    state = update_status(%{state | timer: nil})
     {:noreply, %{state | timer: arm(state.interval)}}
   end
 
@@ -213,7 +222,7 @@ defmodule VintageNetProxy.Connectivity do
 
   # --- Internals ---
 
-  defp probe(state) do
+  defp update_status(state) do
     set_status(state, run_probes(state.probe_urls))
   end
 

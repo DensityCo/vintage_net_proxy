@@ -393,6 +393,25 @@ Probes fire on four triggers:
 You can also force an immediate probe synchronously via
 `VintageNetProxy.check_connectivity/0`, which returns the new result.
 
+### One-shot probes
+
+When another process owns scheduling and recovery policy, use
+`VintageNetProxy.probe_connectivity/1` without enabling the periodic
+connectivity checker:
+
+```elixir
+VintageNetProxy.probe_connectivity([
+  "https://service.example.com",
+  "https://fallback.example.com"
+])
+#=> :ok | {:error, reason}
+```
+
+The one-shot probe reads the current proxy model, resolves PAC decisions per
+URL, and uses the same direct or proxy `CONNECT` paths as the scheduled
+checker. URLs are tried in order until one succeeds. The call does not start a
+process, publish to the VintageNet property table, or schedule another probe.
+
 #### `pac_revision`
 
 `["proxy", "pac_revision"]` carries a monotonic value that increments
