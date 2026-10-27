@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    name: Tag and create GitHub release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tested commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "VERSION must contain a stable semantic version, got: $version" >&2
+            exit 1
+          fi
+
+          version_is_greater() {
+            local lhs_major=$((10#$1))
+            local lhs_minor=$((10#$2))
+            local lhs_patch=$((10#$3))
+            local rhs_major=$((10#$4))
+            local rhs_minor=$((10#$5))
+            local rhs_patch=$((10#$6))
+
+            if ((lhs_major != rhs_major)); then
+              ((lhs_major > rhs_major))
+              return
+            fi
+
+            if ((lhs_minor != rhs_minor)); then
+              ((lhs_minor > rhs_minor))
+              return
+            fi
+
+            ((lhs_patch > rhs_patch))
+          }
+
+          highest_tag=""
+          highest_major=0
+          highest_minor=0
+          highest_patch=0
+
+          while IFS= read -r existing_tag; do
+            if [[ "$existing_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              existing_major="${BASH_REMATCH[1]}"
+              existing_minor="${BASH_REMATCH[2]}"
+              existing_patch="${BASH_REMATCH[3]}"
+
+              if [[ -z "$highest_tag" ]] || version_is_greater \
+                "$existing_major" "$existing_minor" "$existing_patch" \
+                "$highest_major" "$highest_minor" "$highest_patch"; then
+                highest_tag="$existing_tag"
+                highest_major="$existing_major"
+                highest_minor="$existing_minor"
+                highest_patch="$existing_patch"
+              fi
+            fi
+          done < <(git tag --list 'v*')
+
+          tag="v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if [[ "$tag" == "$highest_tag" ]]; then
+            echo "$tag already exists; skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IFS=. read -r major minor patch <<< "$version"
+
+          if [[ -n "$highest_tag" ]] && ! version_is_greater \
+            "$major" "$minor" "$patch" \
+            "$highest_major" "$highest_minor" "$highest_patch"; then
+            echo "VERSION $version is lower than the latest release $highest_tag" >&2
+            exit 1
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        if: steps.version.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --target "${{ github.event.workflow_run.head_sha }}" \
+            --generate-notes
