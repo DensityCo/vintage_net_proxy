@@ -30,6 +30,8 @@ defmodule VintageNetProxy.Connectivity.Probe do
   """
 
   @timeout 5_000
+  @proxy_options [:binary, active: false, packet: :line]
+  @tls_proxy_options [:binary, active: false, packet: :line, verify: :verify_none]
 
   @type decision :: :direct | proxy_descriptor()
   @type proxy_descriptor :: %{
@@ -42,29 +44,24 @@ defmodule VintageNetProxy.Connectivity.Probe do
   @type result :: :ok | {:error, term()}
 
   @spec run(String.t(), decision()) :: result()
-  def run(url, decision) do
-    with {:ok, host, port} <- parse(url) do
-      dispatch(decision, host, port)
+  def run(url, decision) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{host: host, scheme: scheme, port: port}
+      when is_binary(host) and host != "" and is_binary(scheme) ->
+        port = port || if scheme == "https", do: 443, else: 80
+        probe(decision, host, port)
+
+      _ ->
+        {:error, {:bad_probe_url, url}}
     end
   end
 
-  defp dispatch(:direct, host, port),
-    do: direct_probe(host, port)
+  def run(other, _decision), do: {:error, {:bad_probe_url, other}}
 
-  defp dispatch(%{scheme: scheme, host: phost, port: pport} = proxy, host, port)
-       when scheme in [:http, :https] and is_binary(phost) and is_integer(pport),
-       do: connect_probe(host, port, proxy)
-
-  defp dispatch(%{scheme: scheme}, _, _) when scheme in [:socks4, :socks5],
-    do: {:error, :socks_not_supported}
-
-  defp dispatch(other, _, _),
-    do: {:error, {:unsupported_decision, other}}
-
-  defp direct_probe(host, port) do
-    case :gen_tcp.connect(charlist(host), port, [:binary, active: false], @timeout) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
+  defp probe(:direct, host, port) do
+    case :gen_tcp.connect(String.to_charlist(host), port, [:binary, active: false], @timeout) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
         :ok
 
       {:error, reason} ->
@@ -72,15 +69,56 @@ defmodule VintageNetProxy.Connectivity.Probe do
     end
   end
 
-  defp connect_probe(target_host, target_port, proxy) do
-    case connect_to_proxy(proxy) do
-      {:ok, {transport, socket}} ->
+  defp probe(%{scheme: :http, host: host, port: port} = proxy, target_host, target_port)
+       when is_binary(host) and is_integer(port),
+       do: probe_proxy(:gen_tcp, @proxy_options, proxy, target_host, target_port)
+
+  defp probe(%{scheme: :https, host: host, port: port} = proxy, target_host, target_port)
+       when is_binary(host) and is_integer(port),
+       do: probe_proxy(:ssl, @tls_proxy_options, proxy, target_host, target_port)
+
+  defp probe(%{scheme: scheme}, _, _) when scheme in [:socks4, :socks5],
+    do: {:error, :socks_not_supported}
+
+  defp probe(other, _, _),
+    do: {:error, {:unsupported_decision, other}}
+
+  defp probe_proxy(transport, options, proxy, target_host, target_port) do
+    case transport.connect(String.to_charlist(proxy.host), proxy.port, options, @timeout) do
+      {:ok, socket} ->
         try do
-          request = build_connect(target_host, target_port, proxy)
+          authorization =
+            case proxy do
+              %{username: username, password: password}
+              when is_binary(username) and is_binary(password) ->
+                credentials = Base.encode64("#{username}:#{password}")
+                "Proxy-Authorization: Basic #{credentials}\r\n"
+
+              _ ->
+                ""
+            end
+
+          request =
+            "CONNECT #{target_host}:#{target_port} HTTP/1.1\r\n" <>
+              "Host: #{target_host}:#{target_port}\r\n" <>
+              "User-Agent: vintage_net_proxy_connectivity\r\n" <>
+              authorization <> "\r\n"
 
           with :ok <- transport.send(socket, request),
                {:ok, status_line} <- transport.recv(socket, 0, @timeout) do
-            parse_status(status_line)
+            case String.split(status_line, " ", parts: 3) do
+              [_protocol, "200", _reason] ->
+                :ok
+
+              [_protocol, status, _reason] ->
+                case Integer.parse(status) do
+                  {code, _rest} -> {:error, {:http_status, code}}
+                  :error -> {:error, :bad_proxy_response}
+                end
+
+              _ ->
+                {:error, :bad_proxy_response}
+            end
           end
         after
           transport.close(socket)
@@ -90,75 +128,4 @@ defmodule VintageNetProxy.Connectivity.Probe do
         {:error, reason}
     end
   end
-
-  defp connect_to_proxy(%{scheme: :http, host: host, port: port}) do
-    options = [:binary, active: false, packet: :line]
-
-    case :gen_tcp.connect(charlist(host), port, options, @timeout) do
-      {:ok, socket} -> {:ok, {:gen_tcp, socket}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp connect_to_proxy(%{scheme: :https, host: host, port: port}) do
-    options = [:binary, active: false, packet: :line, verify: :verify_none]
-
-    case :ssl.connect(charlist(host), port, options, @timeout) do
-      {:ok, socket} -> {:ok, {:ssl, socket}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp build_connect(host, port, proxy) do
-    authorization =
-      case proxy do
-        %{username: username, password: password}
-        when is_binary(username) and is_binary(password) ->
-          credentials = Base.encode64("#{username}:#{password}")
-          "Proxy-Authorization: Basic #{credentials}\r\n"
-
-        _ ->
-          ""
-      end
-
-    "CONNECT #{host}:#{port} HTTP/1.1\r\n" <>
-      "Host: #{host}:#{port}\r\n" <>
-      "User-Agent: vintage_net_proxy_connectivity\r\n" <>
-      authorization <> "\r\n"
-  end
-
-  defp parse_status(line) do
-    case String.split(line, " ", parts: 3) do
-      [_proto, "200", _] ->
-        :ok
-
-      [_proto, code, _] ->
-        case Integer.parse(code) do
-          {n, _} -> {:error, {:http_status, n}}
-          :error -> {:error, :bad_proxy_response}
-        end
-
-      _ ->
-        {:error, :bad_proxy_response}
-    end
-  end
-
-  defp parse(url) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{host: host, scheme: scheme, port: port}
-      when is_binary(host) and host != "" and is_binary(scheme) ->
-        {:ok, host, port || default_port(scheme)}
-
-      _ ->
-        {:error, {:bad_probe_url, url}}
-    end
-  end
-
-  defp parse(other), do: {:error, {:bad_probe_url, other}}
-
-  defp default_port("https"), do: 443
-  defp default_port("http"), do: 80
-  defp default_port(_), do: 80
-
-  defp charlist(s) when is_binary(s), do: String.to_charlist(s)
 end
