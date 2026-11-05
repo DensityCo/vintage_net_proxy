@@ -14,12 +14,14 @@ defmodule VintageNetProxy.Connectivity.Probe do
       TLS handshake; the goal is to confirm the network path, not
       validate the endpoint.
 
-    * `%{scheme: :http | :https, host: _, port: _}` — open a TCP
-      connection to the proxy and send `CONNECT host:port HTTP/1.1`
-      to it. A `200` response means the proxy successfully opened the
-      upstream TCP connection on our behalf; that is "outbound through
-      the proxy" working end-to-end. We close the tunnel immediately —
-      no need to send a request body to know the upstream link works.
+    * `%{scheme: :http | :https, host: _, port: _}` — connect to the
+      proxy, negotiating TLS first for HTTPS proxies, and send
+      `CONNECT host:port HTTP/1.1` to it. Basic proxy credentials are
+      included when present in the descriptor. A `200` response means
+      the proxy successfully opened the upstream TCP connection on our
+      behalf; that is "outbound through the proxy" working end-to-end.
+      We close the tunnel immediately — no need to send a request body
+      to know the upstream link works.
 
   SOCKS proxies return `{:error, :socks_not_supported}`. Supporting
   them would require a SOCKS client that this library deliberately
@@ -49,9 +51,9 @@ defmodule VintageNetProxy.Connectivity.Probe do
   defp dispatch(:direct, host, port),
     do: direct_probe(host, port)
 
-  defp dispatch(%{scheme: scheme, host: phost, port: pport}, host, port)
+  defp dispatch(%{scheme: scheme, host: phost, port: pport} = proxy, host, port)
        when scheme in [:http, :https] and is_binary(phost) and is_integer(pport),
-       do: connect_probe(host, port, phost, pport)
+       do: connect_probe(host, port, proxy)
 
   defp dispatch(%{scheme: scheme}, _, _) when scheme in [:socks4, :socks5],
     do: {:error, :socks_not_supported}
@@ -70,20 +72,18 @@ defmodule VintageNetProxy.Connectivity.Probe do
     end
   end
 
-  defp connect_probe(target_host, target_port, proxy_host, proxy_port) do
-    opts = [:binary, active: false, packet: :line]
-
-    case :gen_tcp.connect(charlist(proxy_host), proxy_port, opts, @timeout) do
-      {:ok, sock} ->
+  defp connect_probe(target_host, target_port, proxy) do
+    case connect_to_proxy(proxy) do
+      {:ok, {transport, socket}} ->
         try do
-          req = build_connect(target_host, target_port)
+          request = build_connect(target_host, target_port, proxy)
 
-          with :ok <- :gen_tcp.send(sock, req),
-               {:ok, status_line} <- :gen_tcp.recv(sock, 0, @timeout) do
+          with :ok <- transport.send(socket, request),
+               {:ok, status_line} <- transport.recv(socket, 0, @timeout) do
             parse_status(status_line)
           end
         after
-          :gen_tcp.close(sock)
+          transport.close(socket)
         end
 
       {:error, reason} ->
@@ -91,10 +91,40 @@ defmodule VintageNetProxy.Connectivity.Probe do
     end
   end
 
-  defp build_connect(host, port) do
+  defp connect_to_proxy(%{scheme: :http, host: host, port: port}) do
+    options = [:binary, active: false, packet: :line]
+
+    case :gen_tcp.connect(charlist(host), port, options, @timeout) do
+      {:ok, socket} -> {:ok, {:gen_tcp, socket}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp connect_to_proxy(%{scheme: :https, host: host, port: port}) do
+    options = [:binary, active: false, packet: :line, verify: :verify_none]
+
+    case :ssl.connect(charlist(host), port, options, @timeout) do
+      {:ok, socket} -> {:ok, {:ssl, socket}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp build_connect(host, port, proxy) do
+    authorization =
+      case proxy do
+        %{username: username, password: password}
+        when is_binary(username) and is_binary(password) ->
+          credentials = Base.encode64("#{username}:#{password}")
+          "Proxy-Authorization: Basic #{credentials}\r\n"
+
+        _ ->
+          ""
+      end
+
     "CONNECT #{host}:#{port} HTTP/1.1\r\n" <>
       "Host: #{host}:#{port}\r\n" <>
-      "User-Agent: vintage_net_proxy_connectivity\r\n\r\n"
+      "User-Agent: vintage_net_proxy_connectivity\r\n" <>
+      authorization <> "\r\n"
   end
 
   defp parse_status(line) do

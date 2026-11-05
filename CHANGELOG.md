@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* Connectivity probes now negotiate TLS with HTTPS proxies and include
+  Basic authentication when the resolved proxy descriptor contains
+  credentials.
+
 ## 0.1.5 - 2026-10-26
 
 * Added `VintageNetProxy.probe_connectivity/1` for stateless, one-shot
