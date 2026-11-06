@@ -46,6 +46,12 @@ defmodule VintageNetProxy.Intent do
 
   `:scheme` defaults to `:http` if omitted.
 
+  Configurations received from wire protocols may use the equivalent
+  string keys and enum values. Known strings are normalized without
+  creating atoms:
+
+      %{"mode" => "manual", "scheme" => "http", "host" => "proxy.corp", "port" => 8080}
+
   ## Usage with VintageNet
 
       VintageNet.configure("wlan0", %{
@@ -56,6 +62,27 @@ defmodule VintageNetProxy.Intent do
   """
 
   @schemes [:http, :https, :socks4, :socks5]
+
+  @wire_keys %{
+    "mode" => :mode,
+    "pac_url" => :pac_url,
+    "scheme" => :scheme,
+    "host" => :host,
+    "port" => :port,
+    "username" => :username,
+    "password" => :password,
+    "bypass" => :bypass
+  }
+
+  @wire_values %{
+    "direct" => :direct,
+    "auto" => :auto,
+    "manual" => :manual,
+    "http" => :http,
+    "https" => :https,
+    "socks4" => :socks4,
+    "socks5" => :socks5
+  }
 
   @typedoc "Proxy scheme used by manual configurations."
   @type scheme :: :http | :https | :socks4 | :socks5
@@ -105,10 +132,29 @@ defmodule VintageNetProxy.Intent do
   Returns `{:ok, intent}` for valid input or `{:error, reason}` for
   invalid input. Normalization fills in defaults (e.g., `:scheme`
   defaults to `:http` for manual configurations) and strips unknown
-  keys.
+  keys. Known string keys and string values for `:mode` and `:scheme`
+  are accepted at wire-protocol boundaries. Atom keys take precedence
+  when both forms are present.
   """
   @spec normalize(map()) :: {:ok, t()} | {:error, String.t()}
   def normalize(config) when is_map(config) do
+    wire_config =
+      for {wire_key, key} <- @wire_keys,
+          {:ok, value} <- [Map.fetch(config, wire_key)],
+          into: %{},
+          do: {key, value}
+
+    config =
+      Enum.reduce([:mode, :scheme], Map.merge(wire_config, config), fn key, normalized ->
+        case Map.get(normalized, key) do
+          value when is_binary(value) ->
+            Map.put(normalized, key, Map.get(@wire_values, value, value))
+
+          _value ->
+            normalized
+        end
+      end)
+
     case Map.get(config, :mode) do
       :direct -> {:ok, %{mode: :direct}}
       :auto -> normalize_auto(config)
@@ -179,6 +225,22 @@ defmodule VintageNetProxy.Intent do
   @spec to_descriptor(manual()) :: descriptor()
   def to_descriptor(%{mode: :manual} = intent),
     do: Map.take(intent, [:scheme, :host, :port, :username, :password])
+
+  @doc """
+  Remove proxy authentication fields from an intent, descriptor, or
+  published manual proxy tuple before exposing it through diagnostics.
+
+  Runtime routing APIs retain credentials; this function is only for
+  inspection and logging paths.
+  """
+  @spec redact_credentials(term()) :: term()
+  def redact_credentials({:manual, descriptor}) when is_map(descriptor),
+    do: {:manual, Map.drop(descriptor, [:username, :password])}
+
+  def redact_credentials(config) when is_map(config),
+    do: Map.drop(config, [:username, :password])
+
+  def redact_credentials(other), do: other
 
   defp normalize_auto(config) do
     case Map.get(config, :pac_url) do

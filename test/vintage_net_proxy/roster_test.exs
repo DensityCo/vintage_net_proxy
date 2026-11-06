@@ -202,9 +202,33 @@ defmodule VintageNetProxy.RosterTest do
       assert status.by_interface["wlan0"].intent == %{mode: :direct}
     end
 
-    test "current passes through unchanged" do
+    test "current passes through unchanged when it has no credentials" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
       assert Roster.status(s, :anything).current == :anything
+    end
+
+    test "redacts credentials from interface intent and current proxy" do
+      descriptor = %{
+        scheme: :http,
+        host: "p.example",
+        port: 8080,
+        username: "alice",
+        password: "secret"
+      }
+
+      intent = Map.put(descriptor, :mode, :manual)
+      s = state([iface(iface: "eth0", intent: intent, connection: :internet)])
+      status = Roster.status(s, {:manual, descriptor})
+
+      assert status.by_interface["eth0"].intent == %{
+               mode: :manual,
+               scheme: :http,
+               host: "p.example",
+               port: 8080
+             }
+
+      assert status.current ==
+               {:manual, %{scheme: :http, host: "p.example", port: 8080}}
     end
   end
 

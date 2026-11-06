@@ -178,12 +178,14 @@ defmodule VintageNetProxy do
   def get, do: Publisher.get()
 
   @doc """
-  Introspection snapshot — current internal state.
+  Credential-safe introspection snapshot — current internal state.
 
   `:active_iface` is the currently selected interface (or `nil`).
   `:by_interface` maps each configured interface to its `:intent`,
   `:connection`, `:dhcp_wpad_url`, `:pac_url`, `:pac_loaded?`. The
-  published proxy is `:current`.
+  published proxy is `:current`. Manual proxy usernames and passwords
+  are omitted from both the intent and current proxy; `get/0` and
+  `resolve/1` continue to return the complete runtime descriptor.
   """
   @spec status() :: %{
           interfaces: [String.t()],

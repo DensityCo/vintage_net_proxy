@@ -102,6 +102,47 @@ defmodule VintageNetProxy.IntentTest do
     end
   end
 
+  describe "normalize/1 wire payloads" do
+    test "normalizes known string keys and enum values" do
+      assert Intent.normalize(%{
+               "mode" => "manual",
+               "scheme" => "https",
+               "host" => "proxy.corp",
+               "port" => 8080,
+               "username" => "alice",
+               "password" => "secret",
+               "bypass" => ["*.local"]
+             }) ==
+               {:ok,
+                %{
+                  mode: :manual,
+                  scheme: :https,
+                  host: "proxy.corp",
+                  port: 8080,
+                  username: "alice",
+                  password: "secret",
+                  bypass: ["*.local"]
+                }}
+    end
+
+    test "normalizes direct and auto modes" do
+      assert Intent.normalize(%{"mode" => "direct"}) == {:ok, %{mode: :direct}}
+
+      assert Intent.normalize(%{"mode" => "auto", "pac_url" => "http://wpad/wpad.dat"}) ==
+               {:ok, %{mode: :auto, pac_url: "http://wpad/wpad.dat"}}
+    end
+
+    test "drops unknown wire keys" do
+      assert Intent.normalize(%{"mode" => "direct", "unknown" => true}) ==
+               {:ok, %{mode: :direct}}
+    end
+
+    test "atom keys take precedence over duplicate wire keys" do
+      assert Intent.normalize(%{"mode" => "manual", mode: :direct}) ==
+               {:ok, %{mode: :direct}}
+    end
+  end
+
   describe "normalize/1 invalid top-level" do
     test "missing mode" do
       assert {:error, _} = Intent.normalize(%{})
@@ -119,7 +160,7 @@ defmodule VintageNetProxy.IntentTest do
 
   describe "normalize!/1" do
     test "returns normalized intent on success" do
-      assert %{mode: :direct} = Intent.normalize!(%{mode: :direct})
+      assert %{mode: :direct} = Intent.normalize!(%{"mode" => "direct"})
     end
 
     test "raises ArgumentError on failure" do
@@ -149,6 +190,39 @@ defmodule VintageNetProxy.IntentTest do
     test "preserves only scheme/host/port for minimal manual" do
       assert %{scheme: :http, host: "p", port: 80} =
                Intent.to_descriptor(%{mode: :manual, scheme: :http, host: "p", port: 80})
+    end
+  end
+
+  describe "redact_credentials/1" do
+    test "redacts intents, descriptors, and published manual proxies" do
+      descriptor = %{
+        scheme: :http,
+        host: "p.corp",
+        port: 8080,
+        username: "alice",
+        password: "secret"
+      }
+
+      assert Intent.redact_credentials(descriptor) == %{
+               scheme: :http,
+               host: "p.corp",
+               port: 8080
+             }
+
+      assert Intent.redact_credentials(Map.put(descriptor, :mode, :manual)) == %{
+               mode: :manual,
+               scheme: :http,
+               host: "p.corp",
+               port: 8080
+             }
+
+      assert Intent.redact_credentials({:manual, descriptor}) ==
+               {:manual, %{scheme: :http, host: "p.corp", port: 8080}}
+    end
+
+    test "leaves non-authenticated routing values unchanged" do
+      assert Intent.redact_credentials(:direct) == :direct
+      assert Intent.redact_credentials({:auto, :ready}) == {:auto, :ready}
     end
   end
 

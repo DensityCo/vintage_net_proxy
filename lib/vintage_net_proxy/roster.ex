@@ -9,7 +9,7 @@ defmodule VintageNetProxy.Roster do
   itself.
   """
 
-  alias VintageNetProxy.Interface.Proxy
+  alias VintageNetProxy.{Intent, Interface.Proxy}
 
   defstruct interfaces: [], states: %{}
 
@@ -80,7 +80,12 @@ defmodule VintageNetProxy.Roster do
     end
   end
 
-  @doc "Introspection map. `published` is whatever is currently in `[\"proxy\", \"config\"]`."
+  @doc """
+  Credential-safe introspection map.
+
+  `published` is the value currently in `["proxy", "config"]` with
+  manual proxy authentication fields removed.
+  """
   @spec status(t(), term()) :: map()
   def status(state, published) do
     by_interface =
@@ -118,7 +123,7 @@ defmodule VintageNetProxy.Roster do
       interfaces: state.interfaces,
       active_iface: active(state) |> active_iface(),
       by_interface: by_interface,
-      current: published
+      current: Intent.redact_credentials(published)
     }
   end
 

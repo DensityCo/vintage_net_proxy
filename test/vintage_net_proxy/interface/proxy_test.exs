@@ -225,6 +225,22 @@ defmodule VintageNetProxy.Interface.ProxyTest do
   end
 
   describe "snapshot/1" do
+    test "redacts credentials from manual intent and value" do
+      intent = %{
+        mode: :manual,
+        scheme: :http,
+        host: "p",
+        port: 8080,
+        username: "alice",
+        password: "secret"
+      }
+
+      snapshot = Proxy.snapshot(iface(intent: intent, connection: :internet))
+
+      assert snapshot.intent == %{mode: :manual, scheme: :http, host: "p", port: 8080}
+      assert snapshot.value == {:manual, %{scheme: :http, host: "p", port: 8080}}
+    end
+
     test "exposes the documented fields" do
       snap =
         iface(

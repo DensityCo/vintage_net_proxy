@@ -109,6 +109,16 @@ defmodule VintageNetProxyTest do
                   username: "alice",
                   password: "secret"
                 }}
+
+      assert VintageNetProxy.status().current ==
+               {:manual, %{scheme: :socks5, host: "s.corp", port: 1080}}
+
+      assert VintageNetProxy.status().by_interface[iface].intent == %{
+               mode: :manual,
+               scheme: :socks5,
+               host: "s.corp",
+               port: 1080
+             }
     end
 
     test "defaults scheme to :http when omitted", %{config_property: prop, iface: iface} do

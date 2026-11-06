@@ -241,14 +241,14 @@ defmodule VintageNetProxy.Interface.Proxy do
 
   def resolve(_proxy, _url), do: {:error, :no_proxy_resolved}
 
-  @doc "Introspection snapshot."
+  @doc "Introspection snapshot with proxy authentication credentials redacted."
   @spec snapshot(t()) :: map()
   def snapshot(proxy) do
     %{
       iface: proxy.iface,
       eligible?: eligible?(proxy),
-      value: value(proxy),
-      intent: proxy.intent,
+      value: proxy |> value() |> Intent.redact_credentials(),
+      intent: Intent.redact_credentials(proxy.intent),
       connection: proxy.connection,
       pac_loaded?: not is_nil(proxy.pac_script),
       dhcp_wpad_url: proxy.dhcp_wpad_url,
