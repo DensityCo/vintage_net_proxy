@@ -74,6 +74,8 @@ defmodule VintageNetProxy.Intent do
     "bypass" => :bypass
   }
 
+  @intent_keys Map.values(@wire_keys)
+
   @wire_values %{
     "direct" => :direct,
     "auto" => :auto,
@@ -145,15 +147,10 @@ defmodule VintageNetProxy.Intent do
           do: {key, value}
 
     config =
-      Enum.reduce([:mode, :scheme], Map.merge(wire_config, config), fn key, normalized ->
-        case Map.get(normalized, key) do
-          value when is_binary(value) ->
-            Map.put(normalized, key, Map.get(@wire_values, value, value))
-
-          _value ->
-            normalized
-        end
-      end)
+      wire_config
+      |> Map.merge(Map.take(config, @intent_keys))
+      |> Map.update(:mode, nil, fn value -> Map.get(@wire_values, value, value) end)
+      |> Map.update(:scheme, :http, fn value -> Map.get(@wire_values, value, value) end)
 
     case Map.get(config, :mode) do
       :direct -> {:ok, %{mode: :direct}}
