@@ -71,7 +71,7 @@ defmodule VintageNetProxy.Connectivity.Probe do
          target_port
        )
        when is_binary(host) and is_integer(port) do
-    options = [:binary, active: false, packet: :line]
+    options = [:binary, active: false, packet: :http_bin]
 
     case :gen_tcp.connect(String.to_charlist(host), port, options, @timeout) do
       {:ok, socket} ->
@@ -94,16 +94,17 @@ defmodule VintageNetProxy.Connectivity.Probe do
               authorization <> "\r\n"
 
           with :ok <- :gen_tcp.send(socket, request),
-               {:ok, status_line} <- :gen_tcp.recv(socket, 0, @timeout) do
-            case String.split(status_line, " ", parts: 3) do
-              [_protocol, status, _reason] ->
-                case Integer.parse(status) do
-                  {code, _rest} when code in 200..299 -> :ok
-                  {code, _rest} -> {:error, {:http_status, code}}
-                  :error -> {:error, :bad_proxy_response}
-                end
+               {:ok, response} <- :gen_tcp.recv(socket, 0, @timeout) do
+            case response do
+              {:http_response, version, code, _reason}
+              when version in [{1, 0}, {1, 1}] and code in 200..299 ->
+                :ok
 
-              _ ->
+              {:http_response, version, code, _reason}
+              when version in [{1, 0}, {1, 1}] ->
+                {:error, {:http_status, code}}
+
+              _other ->
                 {:error, :bad_proxy_response}
             end
           end

@@ -181,9 +181,8 @@ defmodule VintageNetProxy do
   Secret-free introspection snapshot — current internal state.
 
   `:active_iface` is the currently selected interface (or `nil`).
-  `:by_interface` maps each configured interface to its `:intent`,
-  `:connection`, `:pac_source`, `:dhcp_wpad?`, `:dhcp_domain?`, and
-  `:pac_loaded?`. The published proxy is `:current`. Diagnostic proxy values
+  `:by_interface` maps each configured interface to a secret-free snapshot of
+  its proxy state. The published proxy is `:current`. Diagnostic proxy values
   are constructed from an allowlist; credentials and raw PAC URLs are never
   included. `get/0` and `resolve/1` continue to return the complete runtime
   descriptor.

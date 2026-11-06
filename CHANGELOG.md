@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+* **Breaking:** `VintageNetProxy.status/0` and
+  `VintageNetProxy.Interface.get/1` now return secret-free diagnostic
+  snapshots. `Interface.get/1` no longer returns the internal
+  `VintageNetProxy.Interface.Proxy` struct. Status replaces raw
+  `:dhcp_wpad_url`, `:dhcp_domain`, and `:pac_url` values with
+  `:dhcp_wpad?`, `:dhcp_domain?`, and `:pac_source`, and removes credentials
+  from manual proxy intents and the published `:current` value. Runtime
+  routing APIs (`get/0` and `resolve/1`) continue to return complete proxy
+  descriptors.
+* `VintageNetProxy.Intent.normalize/1` now accepts known string keys and
+  string values for proxy mode and scheme without creating atoms.
+* PAC fetch failure logs now identify targets by scheme, host, and port
+  without exposing URL credentials, paths, queries, or fragments.
 * Connectivity probes now include Basic authentication when the
   resolved HTTP proxy descriptor contains credentials and explicitly
   report unsupported HTTPS proxies.

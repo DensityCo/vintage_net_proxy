@@ -90,33 +90,8 @@ defmodule VintageNetProxy.Roster do
   def status(state, published) do
     by_interface =
       Map.new(state.interfaces, fn iface ->
-        case Map.get(state.states, iface) do
-          nil ->
-            {iface,
-             %{
-               intent: nil,
-               connection: nil,
-               pac_source: nil,
-               dhcp_wpad?: false,
-               dhcp_domain?: false,
-               pac_loaded?: false,
-               local_ip: nil
-             }}
-
-          s ->
-            snap = Proxy.snapshot(s)
-
-            {iface,
-             %{
-               intent: snap.intent,
-               connection: snap.connection,
-               pac_source: snap.pac_source,
-               dhcp_wpad?: snap.dhcp_wpad?,
-               dhcp_domain?: snap.dhcp_domain?,
-               pac_loaded?: snap.pac_loaded?,
-               local_ip: snap.local_ip
-             }}
-        end
+        proxy = Map.get(state.states, iface) || Proxy.new(iface)
+        {iface, Proxy.snapshot(proxy)}
       end)
 
     %{

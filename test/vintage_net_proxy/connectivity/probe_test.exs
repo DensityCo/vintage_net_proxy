@@ -40,12 +40,32 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
       assert Probe.run("https://target.test/", descriptor) == :ok
     end
 
+    test ":ok when an HTTP/1.0 proxy returns a successful status" do
+      port = fake_proxy("HTTP/1.0 200 Connection established\r\n\r\n")
+      descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+
+      assert Probe.run("https://target.test/", descriptor) == :ok
+    end
+
     test "surfaces non-200 CONNECT replies as :http_status" do
       port = fake_proxy("HTTP/1.1 502 Bad Gateway\r\n\r\n")
       descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
 
       assert Probe.run("https://target.test/", descriptor) ==
                {:error, {:http_status, 502}}
+    end
+
+    test "rejects malformed proxy status lines" do
+      for response <- [
+            "garbage 200 OK\r\n\r\n",
+            "HTTP/1.1 200oops OK\r\n\r\n"
+          ] do
+        port = fake_proxy(response)
+        descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+
+        assert Probe.run("https://target.test/", descriptor) ==
+                 {:error, :bad_proxy_response}
+      end
     end
 
     test "sends basic authentication credentials to the proxy" do

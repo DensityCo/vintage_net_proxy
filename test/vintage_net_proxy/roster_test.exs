@@ -200,6 +200,16 @@ defmodule VintageNetProxy.RosterTest do
       assert Map.keys(status.by_interface) |> Enum.sort() == ["eth0", "wlan0"]
       assert status.by_interface["eth0"].intent == nil
       assert status.by_interface["wlan0"].intent == %{mode: :direct}
+      assert status.by_interface["eth0"].value == :unset
+      assert status.by_interface["eth0"].eligible? == false
+      assert status.by_interface["wlan0"].value == :direct
+      assert status.by_interface["wlan0"].eligible? == true
+    end
+
+    test "missing interface state uses an empty proxy snapshot" do
+      status = Roster.new(["eth0"], %{}) |> Roster.status(:unset)
+
+      assert status.by_interface["eth0"] == Proxy.snapshot(Proxy.new("eth0"))
     end
 
     test "unknown current values are not reflected into diagnostics" do

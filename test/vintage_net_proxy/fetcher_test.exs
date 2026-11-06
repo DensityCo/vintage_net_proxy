@@ -1,6 +1,8 @@
 defmodule VintageNetProxy.FetcherTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias VintageNetProxy.Fetcher
 
   setup do
@@ -23,6 +25,37 @@ defmodule VintageNetProxy.FetcherTest do
     spawn_link(fn -> serve(lsock, "404 Not Found", "missing") end)
 
     assert {:error, {:http_status, 404}} = Fetcher.get("http://127.0.0.1:#{port}/missing")
+  end
+
+  test "failure logs exclude URL credentials and request details", %{lsock: lsock, port: port} do
+    spawn_link(fn -> serve(lsock, "404 Not Found", "missing") end)
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:http_status, 404}} =
+                 Fetcher.get(
+                   "http://pac-user:pac-secret@127.0.0.1:#{port}/private/wpad.dat?token=pac-token#pac-fragment"
+                 )
+      end)
+
+    assert log =~ "127.0.0.1"
+    assert log =~ Integer.to_string(port)
+    assert log =~ "{:http_status, 404}"
+    refute log =~ "pac-user"
+    refute log =~ "pac-secret"
+    refute log =~ "/private/wpad.dat"
+    refute log =~ "pac-token"
+    refute log =~ "pac-fragment"
+  end
+
+  test "invalid URL logs exclude the raw input" do
+    log =
+      capture_log(fn ->
+        assert {:error, _reason} = Fetcher.get("not a URL containing pac-secret")
+      end)
+
+    assert log =~ ":invalid_url"
+    refute log =~ "pac-secret"
   end
 
   test "connection refused surfaces as a transport error" do
