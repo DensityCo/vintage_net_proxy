@@ -68,7 +68,19 @@ defmodule VintageNetProxy.Fetcher do
   end
 
   defp log_failure(url, reason) do
-    Logger.warning("VintageNetProxy.Fetcher: GET #{inspect(url)} failed: #{inspect(reason)}")
+    target =
+      case URI.new(url) do
+        {:ok, %URI{scheme: scheme, host: host, port: port}}
+        when is_binary(scheme) and is_binary(host) ->
+          %{scheme: scheme, host: host, port: port}
+
+        _other ->
+          :invalid_url
+      end
+
+    Logger.warning(
+      "VintageNetProxy.Fetcher: PAC fetch failed for #{inspect(target)}: #{inspect(reason)}"
+    )
   end
 
   defp user_agent_header do

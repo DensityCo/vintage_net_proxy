@@ -344,26 +344,31 @@ domains, so a single-vendor outage doesn't take everyone down. Set
   * For `:direct` (or `:unset`) — TCP-connect to the URL's host and
     port. A successful connect means the device can reach that target
     on that port without a proxy.
-  * For `{:manual, descriptor}` with an HTTP/HTTPS scheme —
-    TCP-connect to the proxy and send `CONNECT host:port HTTP/1.1`. A
-    `200` response means the proxy successfully opened the upstream
-    TCP connection on our behalf — i.e. outbound through the proxy is
-    working end-to-end.
+  * For `{:manual, descriptor}` with an HTTP scheme — connect to the
+    proxy and send `CONNECT host:port HTTP/1.1`. Basic proxy
+    authentication is included when the descriptor contains
+    credentials. A `200` response means the proxy successfully opened
+    the upstream TCP connection on our behalf — i.e. outbound through
+    the proxy is working end-to-end.
   * For `{:auto, :ready}` — `resolve/1` is called against the probe URL
     to get a concrete decision, then dispatched as above.
   * For `{:auto, :no_pac}` — falls back to a direct probe so the
     connectivity status honestly reports whether the device can reach
     anything (the answer is usually "no" behind a firewall, which is
     the truthful signal).
+  * HTTPS proxies are reported as
+    `{:error, :https_proxy_not_supported}`. The application transport
+    cannot carry an HTTPS destination through an HTTPS proxy, so the
+    probe must not report that path as healthy.
   * SOCKS proxies are reported as `{:error, :socks_not_supported}`.
     Supporting them would require a SOCKS client this library
     deliberately doesn't carry; an explicit error is more useful than
     a misleading fallback.
 
-The probe is intentionally minimal: no HTTP body, no TLS handshake,
-no captive-portal sniffing. The goal is "did outbound traffic flow,"
-not "is the endpoint healthy" — for the latter, applications already
-know what to check.
+The probe is intentionally minimal: no HTTP body, no TLS handshake, and
+no captive-portal sniffing. The goal is "did outbound traffic flow," not
+"is the endpoint healthy" — for the latter, applications already know
+what to check.
 
 ### Isolation
 
@@ -512,7 +517,7 @@ interface restarts, re-reads its state, and re-fetches its PAC.
 Interfaces are registered via the
 `VintageNetProxy.InterfaceRegistry` (`{:via, Registry, ...}`), so they're
 discoverable by interface name —
-`VintageNetProxy.Interface.get(iface)` returns the live state for
+`VintageNetProxy.Interface.get(iface)` returns a secret-free snapshot for
 debugging or external inspection.
 
 ### Module map
@@ -531,9 +536,9 @@ debugging or external inspection.
 
   * `VintageNetProxy.Intent` — the user-facing proxy intent schema
     (`:direct | :auto | :manual`), its validator (`normalize/1`,
-    `normalize!/1`), and the `adopt/2` helper that turns a VintageNet
-    config payload into a normalized intent, logging on invalid
-    input.
+    `normalize!/1`), its secret-free diagnostic projection, and the
+    `adopt/2` helper that turns a VintageNet config payload into a
+    normalized intent, logging on invalid input.
 
   * `VintageNetProxy.Selector` — a thin GenServer (~35 lines). One
     handle_info clause for `{:interface_changed, ...}`, two

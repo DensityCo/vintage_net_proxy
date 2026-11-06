@@ -200,11 +200,45 @@ defmodule VintageNetProxy.RosterTest do
       assert Map.keys(status.by_interface) |> Enum.sort() == ["eth0", "wlan0"]
       assert status.by_interface["eth0"].intent == nil
       assert status.by_interface["wlan0"].intent == %{mode: :direct}
+      assert status.by_interface["eth0"].value == :unset
+      assert status.by_interface["eth0"].eligible? == false
+      assert status.by_interface["wlan0"].value == :direct
+      assert status.by_interface["wlan0"].eligible? == true
     end
 
-    test "current passes through unchanged" do
+    test "missing interface state uses an empty proxy snapshot" do
+      status = Roster.new(["eth0"], %{}) |> Roster.status(:unset)
+
+      assert status.by_interface["eth0"] == Proxy.snapshot(Proxy.new("eth0"))
+    end
+
+    test "unknown current values are not reflected into diagnostics" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
-      assert Roster.status(s, :anything).current == :anything
+      assert Roster.status(s, :anything).current == :unknown
+    end
+
+    test "allowlists fields from interface intent and current proxy" do
+      descriptor = %{
+        scheme: :http,
+        host: "p.example",
+        port: 8080,
+        username: "alice",
+        password: "secret"
+      }
+
+      intent = Map.put(descriptor, :mode, :manual)
+      s = state([iface(iface: "eth0", intent: intent, connection: :internet)])
+      status = Roster.status(s, {:manual, descriptor})
+
+      assert status.by_interface["eth0"].intent == %{
+               mode: :manual,
+               scheme: :http,
+               host: "p.example",
+               port: 8080
+             }
+
+      assert status.current ==
+               {:manual, %{scheme: :http, host: "p.example", port: 8080}}
     end
   end
 

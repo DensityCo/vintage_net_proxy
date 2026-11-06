@@ -51,7 +51,7 @@ defmodule VintageNetProxyTest do
       assert status.active_iface == nil
       assert status.current == :unset
       assert status.by_interface[iface].intent == nil
-      assert status.by_interface[iface].dhcp_wpad_url == nil
+      assert status.by_interface[iface].dhcp_wpad? == false
       assert status.by_interface[iface].pac_loaded? == false
     end
   end
@@ -109,6 +109,20 @@ defmodule VintageNetProxyTest do
                   username: "alice",
                   password: "secret"
                 }}
+
+      assert VintageNetProxy.status().current ==
+               {:manual, %{scheme: :socks5, host: "s.corp", port: 1080}}
+
+      assert VintageNetProxy.status().by_interface[iface].intent == %{
+               mode: :manual,
+               scheme: :socks5,
+               host: "s.corp",
+               port: 1080
+             }
+
+      snapshot = Interface.get(iface)
+      assert snapshot.intent == %{mode: :manual, scheme: :socks5, host: "s.corp", port: 1080}
+      refute inspect(snapshot) =~ "secret"
     end
 
     test "defaults scheme to :http when omitted", %{config_property: prop, iface: iface} do
@@ -125,25 +139,25 @@ defmodule VintageNetProxyTest do
   end
 
   describe "intent: :auto with DHCP-discovered WPAD URL" do
-    test "records DHCP wpad URL in status", %{dhcp_property: prop, iface: iface} do
+    test "records DHCP wpad presence without its URL", %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
       flush(iface)
 
-      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url ==
-               "http://wpad.test/wpad.dat"
+      status = VintageNetProxy.status().by_interface[iface]
+      assert status.dhcp_wpad? == true
+      refute inspect(status) =~ "wpad.test"
     end
 
-    test "clears DHCP wpad URL when the dhcp_options property is deleted",
+    test "clears DHCP wpad presence when the dhcp_options property is deleted",
          %{dhcp_property: prop, iface: iface} do
       PropertyTable.put(VintageNet, prop, %{wpad: "http://wpad.test/wpad.dat"})
       flush(iface)
 
-      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url ==
-               "http://wpad.test/wpad.dat"
+      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad? == true
 
       PropertyTable.delete(VintageNet, prop)
       flush(iface)
-      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url == nil
+      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad? == false
     end
   end
 

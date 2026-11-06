@@ -9,7 +9,7 @@ defmodule VintageNetProxy.Roster do
   itself.
   """
 
-  alias VintageNetProxy.Interface.Proxy
+  alias VintageNetProxy.{Intent, Interface.Proxy}
 
   defstruct interfaces: [], states: %{}
 
@@ -80,45 +80,25 @@ defmodule VintageNetProxy.Roster do
     end
   end
 
-  @doc "Introspection map. `published` is whatever is currently in `[\"proxy\", \"config\"]`."
+  @doc """
+  Secret-free introspection map.
+
+  `published` is the value currently in `["proxy", "config"]`, projected
+  through the same diagnostic allowlist as interface intents.
+  """
   @spec status(t(), term()) :: map()
   def status(state, published) do
     by_interface =
       Map.new(state.interfaces, fn iface ->
-        case Map.get(state.states, iface) do
-          nil ->
-            {iface,
-             %{
-               intent: nil,
-               connection: nil,
-               dhcp_wpad_url: nil,
-               dhcp_domain: nil,
-               pac_url: nil,
-               pac_loaded?: false,
-               local_ip: nil
-             }}
-
-          s ->
-            snap = Proxy.snapshot(s)
-
-            {iface,
-             %{
-               intent: snap.intent,
-               connection: snap.connection,
-               dhcp_wpad_url: snap.dhcp_wpad_url,
-               dhcp_domain: snap.dhcp_domain,
-               pac_url: snap.pac_url,
-               pac_loaded?: snap.pac_loaded?,
-               local_ip: snap.local_ip
-             }}
-        end
+        proxy = Map.get(state.states, iface) || Proxy.new(iface)
+        {iface, Proxy.snapshot(proxy)}
       end)
 
     %{
       interfaces: state.interfaces,
       active_iface: active(state) |> active_iface(),
       by_interface: by_interface,
-      current: published
+      current: Intent.to_diagnostic(published)
     }
   end
 

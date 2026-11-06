@@ -46,6 +46,12 @@ defmodule VintageNetProxy.Intent do
 
   `:scheme` defaults to `:http` if omitted.
 
+  Configurations received from wire protocols may use the equivalent
+  string keys and enum values. Known strings are normalized without
+  creating atoms:
+
+      %{"mode" => "manual", "scheme" => "http", "host" => "proxy.corp", "port" => 8080}
+
   ## Usage with VintageNet
 
       VintageNet.configure("wlan0", %{
@@ -56,6 +62,29 @@ defmodule VintageNetProxy.Intent do
   """
 
   @schemes [:http, :https, :socks4, :socks5]
+
+  @wire_keys %{
+    "mode" => :mode,
+    "pac_url" => :pac_url,
+    "scheme" => :scheme,
+    "host" => :host,
+    "port" => :port,
+    "username" => :username,
+    "password" => :password,
+    "bypass" => :bypass
+  }
+
+  @intent_keys Map.values(@wire_keys)
+
+  @wire_values %{
+    "direct" => :direct,
+    "auto" => :auto,
+    "manual" => :manual,
+    "http" => :http,
+    "https" => :https,
+    "socks4" => :socks4,
+    "socks5" => :socks5
+  }
 
   @typedoc "Proxy scheme used by manual configurations."
   @type scheme :: :http | :https | :socks4 | :socks5
@@ -87,6 +116,28 @@ defmodule VintageNetProxy.Intent do
   @typedoc "A normalized proxy intent."
   @type t :: direct() | auto() | manual()
 
+  @typedoc "A secret-free representation for status and structured diagnostics."
+  @type diagnostic ::
+          nil
+          | :unset
+          | :direct
+          | :unknown
+          | {:auto, :ready | :no_pac}
+          | {:manual,
+             %{
+               required(:scheme) => scheme(),
+               required(:host) => String.t(),
+               required(:port) => pos_integer()
+             }}
+          | %{required(:mode) => :direct}
+          | %{required(:mode) => :auto, required(:pac_configured?) => boolean()}
+          | %{
+              required(:mode) => :manual,
+              required(:scheme) => scheme(),
+              required(:host) => String.t(),
+              required(:port) => pos_integer()
+            }
+
   @typedoc """
   The runtime proxy descriptor published on `["proxy", "config"]`. A
   `:manual` intent stripped of config-only fields (`:mode`, `:bypass`).
@@ -105,10 +156,24 @@ defmodule VintageNetProxy.Intent do
   Returns `{:ok, intent}` for valid input or `{:error, reason}` for
   invalid input. Normalization fills in defaults (e.g., `:scheme`
   defaults to `:http` for manual configurations) and strips unknown
-  keys.
+  keys. Known string keys and string values for `:mode` and `:scheme`
+  are accepted at wire-protocol boundaries. Atom keys take precedence
+  when both forms are present.
   """
   @spec normalize(map()) :: {:ok, t()} | {:error, String.t()}
   def normalize(config) when is_map(config) do
+    wire_config =
+      for {wire_key, key} <- @wire_keys,
+          {:ok, value} <- [Map.fetch(config, wire_key)],
+          into: %{},
+          do: {key, value}
+
+    config =
+      wire_config
+      |> Map.merge(Map.take(config, @intent_keys))
+      |> Map.update(:mode, nil, fn value -> Map.get(@wire_values, value, value) end)
+      |> Map.update(:scheme, :http, fn value -> Map.get(@wire_values, value, value) end)
+
     case Map.get(config, :mode) do
       :direct -> {:ok, %{mode: :direct}}
       :auto -> normalize_auto(config)
@@ -179,6 +244,29 @@ defmodule VintageNetProxy.Intent do
   @spec to_descriptor(manual()) :: descriptor()
   def to_descriptor(%{mode: :manual} = intent),
     do: Map.take(intent, [:scheme, :host, :port, :username, :password])
+
+  @doc """
+  Convert an intent or published proxy model to a secret-free diagnostic.
+
+  Diagnostic maps are built from an allowlist rather than by deleting known
+  secrets, so future runtime fields cannot leak into status. Runtime routing
+  APIs retain the complete descriptor.
+  """
+  @spec to_diagnostic(term()) :: diagnostic()
+  def to_diagnostic(%{mode: :direct}), do: %{mode: :direct}
+
+  def to_diagnostic(%{mode: :auto} = intent),
+    do: %{mode: :auto, pac_configured?: is_binary(Map.get(intent, :pac_url))}
+
+  def to_diagnostic(%{mode: :manual} = intent),
+    do: Map.take(intent, [:mode, :scheme, :host, :port])
+
+  def to_diagnostic({:manual, descriptor}) when is_map(descriptor),
+    do: {:manual, Map.take(descriptor, [:scheme, :host, :port])}
+
+  def to_diagnostic(value) when value in [:unset, :direct, nil], do: value
+  def to_diagnostic({:auto, state} = value) when state in [:ready, :no_pac], do: value
+  def to_diagnostic(_other), do: :unknown
 
   defp normalize_auto(config) do
     case Map.get(config, :pac_url) do

@@ -225,6 +225,22 @@ defmodule VintageNetProxy.Interface.ProxyTest do
   end
 
   describe "snapshot/1" do
+    test "allowlists manual intent and value fields" do
+      intent = %{
+        mode: :manual,
+        scheme: :http,
+        host: "p",
+        port: 8080,
+        username: "alice",
+        password: "secret"
+      }
+
+      snapshot = Proxy.snapshot(iface(intent: intent, connection: :internet))
+
+      assert snapshot.intent == %{mode: :manual, scheme: :http, host: "p", port: 8080}
+      assert snapshot.value == {:manual, %{scheme: :http, host: "p", port: 8080}}
+    end
+
     test "exposes the documented fields" do
       snap =
         iface(
@@ -241,24 +257,45 @@ defmodule VintageNetProxy.Interface.ProxyTest do
       assert snap.value == :direct
       assert snap.intent == %{mode: :direct}
       assert snap.connection == :internet
-      assert snap.dhcp_wpad_url == "http://wpad/"
+      assert snap.dhcp_wpad? == true
+      assert snap.pac_source == nil
       assert snap.pac_loaded? == true
     end
 
-    test "pac_url falls back to dhcp_wpad_url for :auto intent without explicit pac_url" do
+    test "reports DHCP as the PAC source without exposing its URL" do
       snap =
         iface(intent: %{mode: :auto}, dhcp_wpad_url: "http://wpad.test/")
         |> Proxy.snapshot()
 
-      assert snap.pac_url == "http://wpad.test/"
+      assert snap.intent == %{mode: :auto, pac_configured?: false}
+      assert snap.pac_source == :dhcp
+      assert snap.dhcp_wpad? == true
+      refute Map.has_key?(snap, :pac_url)
+      refute inspect(snap) =~ "wpad.test"
     end
 
-    test "pac_url is nil when intent isn't :auto" do
+    test "reports explicit and DNS-WPAD sources" do
+      explicit =
+        iface(intent: %{mode: :auto, pac_url: "https://secret@wpad.test/pac?token=x"})
+        |> Proxy.snapshot()
+
+      dns =
+        iface(intent: %{mode: :auto}, dhcp_domain: "corp.example.com")
+        |> Proxy.snapshot()
+
+      assert explicit.intent == %{mode: :auto, pac_configured?: true}
+      assert explicit.pac_source == :explicit
+      refute inspect(explicit) =~ "secret"
+      assert dns.pac_source == :dns_wpad
+      assert dns.dhcp_domain? == true
+    end
+
+    test "pac_source is nil when intent isn't :auto" do
       snap =
         iface(intent: %{mode: :direct}, dhcp_wpad_url: "http://wpad.test/")
         |> Proxy.snapshot()
 
-      assert snap.pac_url == nil
+      assert snap.pac_source == nil
     end
 
     test ":auto intent without a script reports pac_loaded? false and {:auto, :no_pac}" do

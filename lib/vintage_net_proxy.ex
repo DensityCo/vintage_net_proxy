@@ -103,7 +103,7 @@ defmodule VintageNetProxy do
   supplied URL.
   """
 
-  alias VintageNetProxy.{Connectivity, Publisher, Selector}
+  alias VintageNetProxy.{Connectivity, Intent, Publisher, Selector}
 
   require Publisher
 
@@ -178,18 +178,20 @@ defmodule VintageNetProxy do
   def get, do: Publisher.get()
 
   @doc """
-  Introspection snapshot — current internal state.
+  Secret-free introspection snapshot — current internal state.
 
   `:active_iface` is the currently selected interface (or `nil`).
-  `:by_interface` maps each configured interface to its `:intent`,
-  `:connection`, `:dhcp_wpad_url`, `:pac_url`, `:pac_loaded?`. The
-  published proxy is `:current`.
+  `:by_interface` maps each configured interface to a secret-free snapshot of
+  its proxy state. The published proxy is `:current`. Diagnostic proxy values
+  are constructed from an allowlist; credentials and raw PAC URLs are never
+  included. `get/0` and `resolve/1` continue to return the complete runtime
+  descriptor.
   """
   @spec status() :: %{
           interfaces: [String.t()],
           active_iface: String.t() | nil,
           by_interface: %{optional(String.t()) => map()},
-          current: proxy()
+          current: Intent.diagnostic()
         }
   def status, do: Selector.status()
 

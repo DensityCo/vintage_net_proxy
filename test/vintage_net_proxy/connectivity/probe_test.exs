@@ -25,9 +25,23 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
     end
   end
 
-  describe "HTTP/HTTPS proxy decision" do
+  describe "HTTP proxy decision" do
     test ":ok when the proxy returns 200 to CONNECT" do
       port = fake_proxy("HTTP/1.1 200 Connection established\r\n\r\n")
+      descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+
+      assert Probe.run("https://target.test/", descriptor) == :ok
+    end
+
+    test ":ok when the proxy returns another successful 2xx status" do
+      port = fake_proxy("HTTP/1.1 204 No Content\r\n\r\n")
+      descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+
+      assert Probe.run("https://target.test/", descriptor) == :ok
+    end
+
+    test ":ok when an HTTP/1.0 proxy returns a successful status" do
+      port = fake_proxy("HTTP/1.0 200 Connection established\r\n\r\n")
       descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
 
       assert Probe.run("https://target.test/", descriptor) == :ok
@@ -41,11 +55,35 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
                {:error, {:http_status, 502}}
     end
 
-    test "treats :https proxy scheme the same as :http for the CONNECT path" do
-      port = fake_proxy("HTTP/1.1 200 OK\r\n\r\n")
-      descriptor = %{scheme: :https, host: "127.0.0.1", port: port}
+    test "rejects malformed proxy status lines" do
+      for response <- [
+            "garbage 200 OK\r\n\r\n",
+            "HTTP/1.1 200oops OK\r\n\r\n"
+          ] do
+        port = fake_proxy(response)
+        descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+
+        assert Probe.run("https://target.test/", descriptor) ==
+                 {:error, :bad_proxy_response}
+      end
+    end
+
+    test "sends basic authentication credentials to the proxy" do
+      port = capture_request_proxy(self(), "HTTP/1.1 200 OK\r\n\r\n")
+
+      descriptor = %{
+        scheme: :http,
+        host: "127.0.0.1",
+        port: port,
+        username: "alice",
+        password: "correct horse battery staple"
+      }
 
       assert Probe.run("https://target.test/", descriptor) == :ok
+      assert_receive {:request, request}, 5_000
+
+      credentials = Base.encode64("alice:correct horse battery staple")
+      assert request =~ "Proxy-Authorization: Basic #{credentials}\r\n"
     end
 
     test "transport errors surface as {:error, _} when the proxy is unreachable" do
@@ -83,6 +121,13 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
   end
 
   describe "unsupported decisions" do
+    test "HTTPS proxies report :https_proxy_not_supported" do
+      descriptor = %{scheme: :https, host: "proxy.corp", port: 443}
+
+      assert Probe.run("https://target.test/", descriptor) ==
+               {:error, :https_proxy_not_supported}
+    end
+
     test "SOCKS proxies report :socks_not_supported" do
       for scheme <- [:socks4, :socks5] do
         descriptor = %{scheme: scheme, host: "p.corp", port: 1080}
