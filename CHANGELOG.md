@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-* Connectivity probes now negotiate TLS with HTTPS proxies and include
-  Basic authentication when the resolved proxy descriptor contains
-  credentials.
+* Connectivity probes now include Basic authentication when the
+  resolved HTTP proxy descriptor contains credentials and explicitly
+  report unsupported HTTPS proxies.
 
 ## 0.1.5 - 2026-10-26
 

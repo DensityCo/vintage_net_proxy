@@ -344,29 +344,31 @@ domains, so a single-vendor outage doesn't take everyone down. Set
   * For `:direct` (or `:unset`) — TCP-connect to the URL's host and
     port. A successful connect means the device can reach that target
     on that port without a proxy.
-  * For `{:manual, descriptor}` with an HTTP/HTTPS scheme — connect to
-    the proxy, negotiate TLS when its scheme is HTTPS, and send
-    `CONNECT host:port HTTP/1.1`. Basic proxy authentication is included
-    when the descriptor contains credentials. A `200` response means
-    the proxy successfully opened the upstream TCP connection on our
-    behalf — i.e. outbound through the proxy is working end-to-end.
+  * For `{:manual, descriptor}` with an HTTP scheme — connect to the
+    proxy and send `CONNECT host:port HTTP/1.1`. Basic proxy
+    authentication is included when the descriptor contains
+    credentials. A `200` response means the proxy successfully opened
+    the upstream TCP connection on our behalf — i.e. outbound through
+    the proxy is working end-to-end.
   * For `{:auto, :ready}` — `resolve/1` is called against the probe URL
     to get a concrete decision, then dispatched as above.
   * For `{:auto, :no_pac}` — falls back to a direct probe so the
     connectivity status honestly reports whether the device can reach
     anything (the answer is usually "no" behind a firewall, which is
     the truthful signal).
+  * HTTPS proxies are reported as
+    `{:error, :https_proxy_not_supported}`. The application transport
+    cannot carry an HTTPS destination through an HTTPS proxy, so the
+    probe must not report that path as healthy.
   * SOCKS proxies are reported as `{:error, :socks_not_supported}`.
     Supporting them would require a SOCKS client this library
     deliberately doesn't carry; an explicit error is more useful than
     a misleading fallback.
 
-The probe is intentionally minimal: no HTTP body, no TLS handshake with
-the destination, and no captive-portal sniffing. It does negotiate TLS
-with HTTPS proxies, without certificate verification, to support private
-corporate proxies on Nerves systems that do not carry a public CA store.
-The goal is "did outbound traffic flow," not "is the endpoint healthy" —
-for the latter, applications already know what to check.
+The probe is intentionally minimal: no HTTP body, no TLS handshake, and
+no captive-portal sniffing. The goal is "did outbound traffic flow," not
+"is the endpoint healthy" — for the latter, applications already know
+what to check.
 
 ### Isolation
 

@@ -25,9 +25,16 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
     end
   end
 
-  describe "HTTP/HTTPS proxy decision" do
+  describe "HTTP proxy decision" do
     test ":ok when the proxy returns 200 to CONNECT" do
       port = fake_proxy("HTTP/1.1 200 Connection established\r\n\r\n")
+      descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
+
+      assert Probe.run("https://target.test/", descriptor) == :ok
+    end
+
+    test ":ok when the proxy returns another successful 2xx status" do
+      port = fake_proxy("HTTP/1.1 204 No Content\r\n\r\n")
       descriptor = %{scheme: :http, host: "127.0.0.1", port: port}
 
       assert Probe.run("https://target.test/", descriptor) == :ok
@@ -39,15 +46,6 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
 
       assert Probe.run("https://target.test/", descriptor) ==
                {:error, {:http_status, 502}}
-    end
-
-    test "negotiates TLS with an HTTPS proxy before sending CONNECT" do
-      port = capture_tls_proxy(self(), "HTTP/1.1 200 OK\r\n\r\n")
-      descriptor = %{scheme: :https, host: "localhost", port: port}
-
-      assert Probe.run("https://target.test/", descriptor) == :ok
-      assert_receive {:request, request}, 5_000
-      assert request =~ "CONNECT target.test:443 HTTP/1.1"
     end
 
     test "sends basic authentication credentials to the proxy" do
@@ -103,6 +101,13 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
   end
 
   describe "unsupported decisions" do
+    test "HTTPS proxies report :https_proxy_not_supported" do
+      descriptor = %{scheme: :https, host: "proxy.corp", port: 443}
+
+      assert Probe.run("https://target.test/", descriptor) ==
+               {:error, :https_proxy_not_supported}
+    end
+
     test "SOCKS proxies report :socks_not_supported" do
       for scheme <- [:socks4, :socks5] do
         descriptor = %{scheme: scheme, host: "p.corp", port: 1080}
@@ -170,41 +175,5 @@ defmodule VintageNetProxy.Connectivity.ProbeTest do
     end)
 
     port
-  end
-
-  defp capture_tls_proxy(test_pid, response) do
-    certfile = fixture_path("proxy-cert.pem")
-    keyfile = fixture_path("proxy-key.pem")
-
-    {:ok, listen_socket} =
-      :ssl.listen(0,
-        certfile: certfile,
-        keyfile: keyfile,
-        mode: :binary,
-        active: false,
-        packet: :raw,
-        reuseaddr: true
-      )
-
-    {:ok, {_address, port}} = :ssl.sockname(listen_socket)
-    on_exit(fn -> :ssl.close(listen_socket) end)
-
-    spawn_link(fn ->
-      {:ok, transport_socket} = :ssl.transport_accept(listen_socket, 5_000)
-      {:ok, socket} = :ssl.handshake(transport_socket, 5_000)
-      {:ok, request} = :ssl.recv(socket, 0, 5_000)
-      send(test_pid, {:request, request})
-      :ssl.send(socket, response)
-      :ssl.close(socket)
-    end)
-
-    port
-  end
-
-  defp fixture_path(name) do
-    __DIR__
-    |> Path.join("../../fixtures/#{name}")
-    |> Path.expand()
-    |> String.to_charlist()
   end
 end

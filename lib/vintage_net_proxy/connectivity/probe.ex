@@ -14,24 +14,20 @@ defmodule VintageNetProxy.Connectivity.Probe do
       TLS handshake; the goal is to confirm the network path, not
       validate the endpoint.
 
-    * `%{scheme: :http | :https, host: _, port: _}` — connect to the
-      proxy, negotiating TLS first for HTTPS proxies, and send
-      `CONNECT host:port HTTP/1.1` to it. Basic proxy credentials are
+    * `%{scheme: :http, host: _, port: _}` — connect to the proxy and
+      send `CONNECT host:port HTTP/1.1`. Basic proxy credentials are
       included when present in the descriptor. A `200` response means
       the proxy successfully opened the upstream TCP connection on our
       behalf; that is "outbound through the proxy" working end-to-end.
       We close the tunnel immediately — no need to send a request body
       to know the upstream link works.
 
-  SOCKS proxies return `{:error, :socks_not_supported}`. Supporting
-  them would require a SOCKS client that this library deliberately
-  doesn't carry; the explicit error is more useful than a misleading
-  fallback.
+  HTTPS and SOCKS proxies return explicit unsupported errors rather
+  than reporting success for a path the application transport cannot
+  use.
   """
 
   @timeout 5_000
-  @proxy_options [:binary, active: false, packet: :line]
-  @tls_proxy_options [:binary, active: false, packet: :line, verify: :verify_none]
 
   @type decision :: :direct | proxy_descriptor()
   @type proxy_descriptor :: %{
@@ -69,22 +65,15 @@ defmodule VintageNetProxy.Connectivity.Probe do
     end
   end
 
-  defp probe(%{scheme: :http, host: host, port: port} = proxy, target_host, target_port)
-       when is_binary(host) and is_integer(port),
-       do: probe_proxy(:gen_tcp, @proxy_options, proxy, target_host, target_port)
+  defp probe(
+         %{scheme: :http, host: host, port: port} = proxy,
+         target_host,
+         target_port
+       )
+       when is_binary(host) and is_integer(port) do
+    options = [:binary, active: false, packet: :line]
 
-  defp probe(%{scheme: :https, host: host, port: port} = proxy, target_host, target_port)
-       when is_binary(host) and is_integer(port),
-       do: probe_proxy(:ssl, @tls_proxy_options, proxy, target_host, target_port)
-
-  defp probe(%{scheme: scheme}, _, _) when scheme in [:socks4, :socks5],
-    do: {:error, :socks_not_supported}
-
-  defp probe(other, _, _),
-    do: {:error, {:unsupported_decision, other}}
-
-  defp probe_proxy(transport, options, proxy, target_host, target_port) do
-    case transport.connect(String.to_charlist(proxy.host), proxy.port, options, @timeout) do
+    case :gen_tcp.connect(String.to_charlist(host), port, options, @timeout) do
       {:ok, socket} ->
         try do
           authorization =
@@ -104,14 +93,12 @@ defmodule VintageNetProxy.Connectivity.Probe do
               "User-Agent: vintage_net_proxy_connectivity\r\n" <>
               authorization <> "\r\n"
 
-          with :ok <- transport.send(socket, request),
-               {:ok, status_line} <- transport.recv(socket, 0, @timeout) do
+          with :ok <- :gen_tcp.send(socket, request),
+               {:ok, status_line} <- :gen_tcp.recv(socket, 0, @timeout) do
             case String.split(status_line, " ", parts: 3) do
-              [_protocol, "200", _reason] ->
-                :ok
-
               [_protocol, status, _reason] ->
                 case Integer.parse(status) do
+                  {code, _rest} when code in 200..299 -> :ok
                   {code, _rest} -> {:error, {:http_status, code}}
                   :error -> {:error, :bad_proxy_response}
                 end
@@ -121,11 +108,20 @@ defmodule VintageNetProxy.Connectivity.Probe do
             end
           end
         after
-          transport.close(socket)
+          :gen_tcp.close(socket)
         end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  defp probe(%{scheme: :https}, _, _),
+    do: {:error, :https_proxy_not_supported}
+
+  defp probe(%{scheme: scheme}, _, _) when scheme in [:socks4, :socks5],
+    do: {:error, :socks_not_supported}
+
+  defp probe(other, _, _),
+    do: {:error, {:unsupported_decision, other}}
 end
