@@ -517,7 +517,7 @@ interface restarts, re-reads its state, and re-fetches its PAC.
 Interfaces are registered via the
 `VintageNetProxy.InterfaceRegistry` (`{:via, Registry, ...}`), so they're
 discoverable by interface name —
-`VintageNetProxy.Interface.get(iface)` returns the live state for
+`VintageNetProxy.Interface.get(iface)` returns a secret-free snapshot for
 debugging or external inspection.
 
 ### Module map
@@ -536,9 +536,9 @@ debugging or external inspection.
 
   * `VintageNetProxy.Intent` — the user-facing proxy intent schema
     (`:direct | :auto | :manual`), its validator (`normalize/1`,
-    `normalize!/1`), and the `adopt/2` helper that turns a VintageNet
-    config payload into a normalized intent, logging on invalid
-    input.
+    `normalize!/1`), its secret-free diagnostic projection, and the
+    `adopt/2` helper that turns a VintageNet config payload into a
+    normalized intent, logging on invalid input.
 
   * `VintageNetProxy.Selector` — a thin GenServer (~35 lines). One
     handle_info clause for `{:interface_changed, ...}`, two

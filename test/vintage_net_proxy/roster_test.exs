@@ -202,12 +202,12 @@ defmodule VintageNetProxy.RosterTest do
       assert status.by_interface["wlan0"].intent == %{mode: :direct}
     end
 
-    test "current passes through unchanged when it has no credentials" do
+    test "unknown current values are not reflected into diagnostics" do
       s = state([iface(iface: "eth0", intent: %{mode: :direct}, connection: :internet)])
-      assert Roster.status(s, :anything).current == :anything
+      assert Roster.status(s, :anything).current == :unknown
     end
 
-    test "redacts credentials from interface intent and current proxy" do
+    test "allowlists fields from interface intent and current proxy" do
       descriptor = %{
         scheme: :http,
         host: "p.example",

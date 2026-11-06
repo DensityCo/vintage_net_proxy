@@ -81,10 +81,10 @@ defmodule VintageNetProxy.Roster do
   end
 
   @doc """
-  Credential-safe introspection map.
+  Secret-free introspection map.
 
-  `published` is the value currently in `["proxy", "config"]` with
-  manual proxy authentication fields removed.
+  `published` is the value currently in `["proxy", "config"]`, projected
+  through the same diagnostic allowlist as interface intents.
   """
   @spec status(t(), term()) :: map()
   def status(state, published) do
@@ -96,9 +96,9 @@ defmodule VintageNetProxy.Roster do
              %{
                intent: nil,
                connection: nil,
-               dhcp_wpad_url: nil,
-               dhcp_domain: nil,
-               pac_url: nil,
+               pac_source: nil,
+               dhcp_wpad?: false,
+               dhcp_domain?: false,
                pac_loaded?: false,
                local_ip: nil
              }}
@@ -110,9 +110,9 @@ defmodule VintageNetProxy.Roster do
              %{
                intent: snap.intent,
                connection: snap.connection,
-               dhcp_wpad_url: snap.dhcp_wpad_url,
-               dhcp_domain: snap.dhcp_domain,
-               pac_url: snap.pac_url,
+               pac_source: snap.pac_source,
+               dhcp_wpad?: snap.dhcp_wpad?,
+               dhcp_domain?: snap.dhcp_domain?,
                pac_loaded?: snap.pac_loaded?,
                local_ip: snap.local_ip
              }}
@@ -123,7 +123,7 @@ defmodule VintageNetProxy.Roster do
       interfaces: state.interfaces,
       active_iface: active(state) |> active_iface(),
       by_interface: by_interface,
-      current: Intent.redact_credentials(published)
+      current: Intent.to_diagnostic(published)
     }
   end
 

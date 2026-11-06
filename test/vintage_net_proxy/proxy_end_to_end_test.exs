@@ -192,7 +192,8 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
       flush(iface)
 
       status = VintageNetProxy.status().by_interface[iface]
-      assert status.dhcp_wpad_url == @wpad_url
+      assert status.dhcp_wpad? == true
+      assert status.pac_source == :dhcp
       assert status.pac_loaded? == true
       assert VintageNet.get(["proxy", "config"]) == {:auto, :ready}
 
@@ -210,13 +211,15 @@ defmodule VintageNetProxy.ProxyEndToEndTest do
       env_bound = %{"interface" => iface, "ip" => "10.0.0.5", "wpad" => @wpad_url}
       VintageNet.OSEventDispatcher.dispatch(["bound"], env_bound)
       flush(iface)
-      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url == @wpad_url
+      assert VintageNetProxy.status().by_interface[iface].pac_source == :dhcp
 
       # Now lose the lease.
       VintageNet.OSEventDispatcher.dispatch(["deconfig"], %{"interface" => iface})
       flush(iface)
 
-      assert VintageNetProxy.status().by_interface[iface].dhcp_wpad_url == nil
+      status = VintageNetProxy.status().by_interface[iface]
+      assert status.dhcp_wpad? == false
+      assert status.pac_source == nil
     end
   end
 

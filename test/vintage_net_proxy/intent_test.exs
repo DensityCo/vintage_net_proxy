@@ -193,36 +193,39 @@ defmodule VintageNetProxy.IntentTest do
     end
   end
 
-  describe "redact_credentials/1" do
-    test "redacts intents, descriptors, and published manual proxies" do
+  describe "to_diagnostic/1" do
+    test "allowlists manual intent and published proxy fields" do
       descriptor = %{
         scheme: :http,
         host: "p.corp",
         port: 8080,
         username: "alice",
-        password: "secret"
+        password: "secret",
+        token: "future-secret"
       }
 
-      assert Intent.redact_credentials(descriptor) == %{
-               scheme: :http,
-               host: "p.corp",
-               port: 8080
-             }
-
-      assert Intent.redact_credentials(Map.put(descriptor, :mode, :manual)) == %{
+      assert Intent.to_diagnostic(Map.put(descriptor, :mode, :manual)) == %{
                mode: :manual,
                scheme: :http,
                host: "p.corp",
                port: 8080
              }
 
-      assert Intent.redact_credentials({:manual, descriptor}) ==
+      assert Intent.to_diagnostic({:manual, descriptor}) ==
                {:manual, %{scheme: :http, host: "p.corp", port: 8080}}
     end
 
-    test "leaves non-authenticated routing values unchanged" do
-      assert Intent.redact_credentials(:direct) == :direct
-      assert Intent.redact_credentials({:auto, :ready}) == {:auto, :ready}
+    test "reports explicit PAC configuration without exposing its URL" do
+      assert Intent.to_diagnostic(%{mode: :auto, pac_url: "https://secret@wpad/pac?token=x"}) ==
+               %{mode: :auto, pac_configured?: true}
+
+      assert Intent.to_diagnostic(%{mode: :auto}) == %{mode: :auto, pac_configured?: false}
+    end
+
+    test "preserves known non-secret routing values and hides unknown shapes" do
+      assert Intent.to_diagnostic(:direct) == :direct
+      assert Intent.to_diagnostic({:auto, :ready}) == {:auto, :ready}
+      assert Intent.to_diagnostic(%{token: "secret"}) == :unknown
     end
   end
 

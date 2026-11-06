@@ -116,6 +116,28 @@ defmodule VintageNetProxy.Intent do
   @typedoc "A normalized proxy intent."
   @type t :: direct() | auto() | manual()
 
+  @typedoc "A secret-free representation for status and structured diagnostics."
+  @type diagnostic ::
+          nil
+          | :unset
+          | :direct
+          | :unknown
+          | {:auto, :ready | :no_pac}
+          | {:manual,
+             %{
+               required(:scheme) => scheme(),
+               required(:host) => String.t(),
+               required(:port) => pos_integer()
+             }}
+          | %{required(:mode) => :direct}
+          | %{required(:mode) => :auto, required(:pac_configured?) => boolean()}
+          | %{
+              required(:mode) => :manual,
+              required(:scheme) => scheme(),
+              required(:host) => String.t(),
+              required(:port) => pos_integer()
+            }
+
   @typedoc """
   The runtime proxy descriptor published on `["proxy", "config"]`. A
   `:manual` intent stripped of config-only fields (`:mode`, `:bypass`).
@@ -224,20 +246,27 @@ defmodule VintageNetProxy.Intent do
     do: Map.take(intent, [:scheme, :host, :port, :username, :password])
 
   @doc """
-  Remove proxy authentication fields from an intent, descriptor, or
-  published manual proxy tuple before exposing it through diagnostics.
+  Convert an intent or published proxy model to a secret-free diagnostic.
 
-  Runtime routing APIs retain credentials; this function is only for
-  inspection and logging paths.
+  Diagnostic maps are built from an allowlist rather than by deleting known
+  secrets, so future runtime fields cannot leak into status. Runtime routing
+  APIs retain the complete descriptor.
   """
-  @spec redact_credentials(term()) :: term()
-  def redact_credentials({:manual, descriptor}) when is_map(descriptor),
-    do: {:manual, Map.drop(descriptor, [:username, :password])}
+  @spec to_diagnostic(term()) :: diagnostic()
+  def to_diagnostic(%{mode: :direct}), do: %{mode: :direct}
 
-  def redact_credentials(config) when is_map(config),
-    do: Map.drop(config, [:username, :password])
+  def to_diagnostic(%{mode: :auto} = intent),
+    do: %{mode: :auto, pac_configured?: is_binary(Map.get(intent, :pac_url))}
 
-  def redact_credentials(other), do: other
+  def to_diagnostic(%{mode: :manual} = intent),
+    do: Map.take(intent, [:mode, :scheme, :host, :port])
+
+  def to_diagnostic({:manual, descriptor}) when is_map(descriptor),
+    do: {:manual, Map.take(descriptor, [:scheme, :host, :port])}
+
+  def to_diagnostic(value) when value in [:unset, :direct, nil], do: value
+  def to_diagnostic({:auto, state} = value) when state in [:ready, :no_pac], do: value
+  def to_diagnostic(_other), do: :unknown
 
   defp normalize_auto(config) do
     case Map.get(config, :pac_url) do

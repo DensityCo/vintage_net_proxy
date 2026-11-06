@@ -241,31 +241,32 @@ defmodule VintageNetProxy.Interface.Proxy do
 
   def resolve(_proxy, _url), do: {:error, :no_proxy_resolved}
 
-  @doc "Introspection snapshot with proxy authentication credentials redacted."
+  @doc "Secret-free introspection snapshot."
   @spec snapshot(t()) :: map()
   def snapshot(proxy) do
     %{
       iface: proxy.iface,
       eligible?: eligible?(proxy),
-      value: proxy |> value() |> Intent.redact_credentials(),
-      intent: Intent.redact_credentials(proxy.intent),
+      value: proxy |> value() |> Intent.to_diagnostic(),
+      intent: Intent.to_diagnostic(proxy.intent),
       connection: proxy.connection,
       pac_loaded?: not is_nil(proxy.pac_script),
-      dhcp_wpad_url: proxy.dhcp_wpad_url,
-      dhcp_domain: proxy.dhcp_domain,
-      pac_url: configured_pac_url(proxy),
+      pac_source: pac_source(proxy),
+      dhcp_wpad?: is_binary(proxy.dhcp_wpad_url),
+      dhcp_domain?: is_binary(proxy.dhcp_domain),
       local_ip: proxy.local_ip
     }
   end
 
-  defp configured_pac_url(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
-    do: url
+  defp pac_source(%{intent: %{mode: :auto, pac_url: url}}) when is_binary(url),
+    do: :explicit
 
-  defp configured_pac_url(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
-    do: url
+  defp pac_source(%{intent: %{mode: :auto}, dhcp_wpad_url: url}) when is_binary(url),
+    do: :dhcp
 
-  defp configured_pac_url(%{intent: %{mode: :auto}, dhcp_domain: domain}) when is_binary(domain),
-    do: Wpad.dns_url(domain)
+  defp pac_source(%{intent: %{mode: :auto}, dhcp_domain: domain}) when is_binary(domain) do
+    if Wpad.dns_url(domain), do: :dns_wpad
+  end
 
-  defp configured_pac_url(_), do: nil
+  defp pac_source(_), do: nil
 end

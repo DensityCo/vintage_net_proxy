@@ -59,8 +59,9 @@ defmodule VintageNetProxy.Interface do
     }
   end
 
-  @doc "Synchronously fetch the current `Proxy` for `iface` (blocks on its mailbox)."
-  def get(iface), do: GenServer.call(via(iface), :get_state)
+  @doc "Synchronously fetch a secret-free snapshot for `iface` (blocks on its mailbox)."
+  @spec get(String.t()) :: map()
+  def get(iface), do: GenServer.call(via(iface), :get_snapshot)
 
   defp via(iface), do: {:via, Registry, {VintageNetProxy.InterfaceRegistry, iface}}
 
@@ -101,7 +102,7 @@ defmodule VintageNetProxy.Interface do
   end
 
   @impl true
-  def handle_call(:get_state, _from, state), do: {:reply, state.proxy, state}
+  def handle_call(:get_snapshot, _from, state), do: {:reply, Proxy.snapshot(state.proxy), state}
 
   @impl true
   def handle_info({VintageNet, ["interface", _, "config"], _o, new, _m}, state),
