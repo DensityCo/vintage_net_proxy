@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-05
+
 * **Breaking:** `VintageNetProxy.status/0` and
   `VintageNetProxy.Interface.get/1` now return secret-free diagnostic
   snapshots. `Interface.get/1` no longer returns the internal
